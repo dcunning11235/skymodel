@@ -62,7 +62,7 @@ def main():
 
     parser.add_argument(
         '--plate', type=int, default=None, metavar='PLATE',
-        help='Plate number of spectrum to plot.')
+        help='Plate number to pull metadata for.')
     parser.add_argument(
         '--mjd', type=int, default=None, metavar='MJD',
         help='MJD of plate observation to use (can be omitted if only one value is possible)')
@@ -70,8 +70,8 @@ def main():
         '--fiber', type=int, default=1, metavar='FIBER',
         help='Fiber number identifying the spectrum of the requested PLATE-MJD to plot.')
     parser.add_argument(
-        '--file', type=str, default=None, metavar='FILE',
-        help='File that contains list of PLATE, MJD, FIBER records to output metadata for.'
+        '--list_file', type=str, default=None, metavar='LIST_FILE',
+        help='File that contains list of PLATE, MJD, FIBER records to output metadata for; e.g. the output from bossquery'
     )
     parser.add_argument(
         '--output', type=str, default='FITS', metavar='OUTPUT',
@@ -102,11 +102,11 @@ def main():
                 exposure_table = vstack(exposure_table_list)
             else:
                 exposure_table = exposure_table_list[0]
-                
+
             if args.output == 'FITS':
                 exposure_table.write("exposure_metadata.csv", format="ascii.csv")
             elif args.output == 'CSV':
-                exposure_table.write("exposure_metadata.fits", format="fits"))
+                exposure_table.write("exposure_metadata.fits", format="fits")
 
 if __name__ == '__main__':
     main()

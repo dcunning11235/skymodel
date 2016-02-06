@@ -52,8 +52,6 @@ def find_sunspot_data(ephemeris_block, sunspot_md_table):
 
     #terrible for performance, but one-time only
     for i, somedate in enumerate(ephemeris_block):
-        #print ephemeris_block[i]
-        #lookup_str = ephemeris_block[i].date().strftime('%Y-%b-%d')
         lookup_str = ephemeris_block[i].split()[0]
         result = sunspot_md_table[sunspot_md_table["DATE"]==lookup_str]["SESC","SSAREA"]
         count_ret[i], area_ret[i] = result["SESC"][0], result["SSAREA"][0]
@@ -82,12 +80,12 @@ def tai_str_to_datetime(tai):
     if isinstance(tai, basestring):
         if tai.count(':') == 2:
             if tai.count('.') == 1:
-                tai = dt.datetime.strptime(tai, "%Y-%m-%d %H:%M:%S.%f")
+                tai = dt.datetime.strptime(tai, "%Y-%m-%dT%H:%M:%S.%f")
                 tai = tai.replace(microsecond=0)
             else:
-                tai = dt.datetime.strptime(tai, "%Y-%m-%d %H:%M:%S")
+                tai = dt.datetime.strptime(tai, "%Y-%m-%dT%H:%M:%S")
         elif tai.count(':') == 1:
-            tai = dt.datetime.strptime(tai, "%Y-%m-%d %H:%M")
+            tai = dt.datetime.strptime(tai, "%Y-%m-%dT%H:%M")
 
     return tai
 
@@ -126,11 +124,11 @@ def main():
         required=True, help='File containing lunar ephemeris metadata.'
     )
     parser.add_argument(
-        '--solar_metadata', type=str, default=None, metadata='SOLAR_METADATA',
+        '--solar_metadata', type=str, default=None, metavar='SOLAR_METADATA',
         required=True, help='File containing solar ephemeris metadata.'
     )
     parser.add_argument(
-        '--sunspot_metadata', type=str, default=None, metadata='SUNSPOT_METADATA',
+        '--sunspot_metadata', type=str, default=None, metavar='SUNSPOT_METADATA',
         required=True, help='File containing sunspot metadata.'
     )
     parser.add_argument(
@@ -139,8 +137,14 @@ def main():
     )
     args = parser.parse_args()
 
-    obs_md_table = Table.read(args.obs_metadata, format="ascii.csv")
-    lunar_md_table = Table.readargs.lunar_metadata, format="ascii.csv")
+    if args.output.upper() == 'CSV':
+        obs_md_table = Table.read(args.obs_metadata, format="ascii.csv")
+    elif args.output.upper == 'FITS':
+        obs_md_table = Table.read(args.obs_metadata, format="fits")
+    else:
+        obs_md_table = Table.read(args.obs_metadata)
+
+    lunar_md_table = Table.read(args.lunar_metadata, format="ascii.csv")
     lunar_md_table.rename_column('UTC', 'EPHEM_DATE')
     solar_md_table = Table.read(args.solar_metadata, format="ascii.csv")
     solar_md_table.rename_column('UTC', 'EPHEM_DATE')
@@ -171,7 +175,6 @@ def main():
     obs_md_table.rename_column("MG_APP", "LUNAR_MAGNITUDE")
     obs_md_table.rename_column("ELV_APP", "LUNAR_ELV")
     obs_md_table.remove_columns(['RA_APP', 'DEC_APP'])
-    #print obs_md_table
 
     #Join solar data to the table
     obs_md_table = join(obs_md_table, solar_md_table['EPHEM_DATE', 'RA_APP', 'DEC_APP', 'ELV_APP'])
@@ -191,10 +194,10 @@ def main():
     obs_md_table.add_column(Column(boresight_ra_dec.transform_to('galactic').b.degree,
                                 dtype=float, name="GALACTIC_PLANE_SEP"))
     #print obs_md_table
-    if args.output == 'FITS':
+    if args.output == 'CSV':
         obs_md_table.write("annotated_metadata.csv", format="ascii.csv")
-    elif args.output == 'CSV':
-        obs_md_table.write("annotated_metadata.fits", format="fits"))
+    elif args.output == 'FITS':
+        obs_md_table.write("annotated_metadata.fits", format="fits")
 
 if __name__ == '__main__':
     main()

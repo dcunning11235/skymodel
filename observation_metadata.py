@@ -1,6 +1,7 @@
 import numpy as np
 from astropy.table import Table
 from astropy.table import vstack
+from astropy.time import Time
 import astropy.coordinates as ascoord
 import sys
 import datetime as dt
@@ -31,18 +32,23 @@ def file_deets(plate, mjd, gather=False):
     spec_path = finder.get_spec_path(plate, mjd, fiber, lite=False)
     spec_path = manager.get(spec_path)
     spec = bdspec.SpecFile(spec_path)
-    exposure_list = spec.exposures.table['science'][0:(spec.num_exposures/2)]
+    exposure_list = spec.exposures.table['science'][0:(spec.num_exposures)]
 
-    exposure_data = np.empty((spec.num_exposures/2, ),
+    exposure_data = np.empty((spec.num_exposures, ),
                         dtype=[('PLATE', int), ('MJD', int), ('EXP_ID', "|S6"), ('RA', float), ('DEC', float),
-                            ('AZ', float), ('ALT', float), ('AIRMASS', float), ('TAI-BEG', dt.datetime), ('TAI-END', dt.datetime)])
+                            ('AZ', float), ('ALT', float), ('AIRMASS', float), ('TAI-BEG', '|S20'), ('TAI-END', '|S20')])
+                            #('TAI-BEG', dt.datetime), ('TAI-END', dt.datetime)])
     for i, exp in enumerate(spec.exposures.sequence):
         exp_header = spec.get_exposure_hdu(i, 'r1').read_header()
         exposure_data[i] = (int(plate), int(mjd), exp,
                         exp_header['RA'], exp_header['DEC'],
                         exp_header['AZ'], exp_header['ALT'], exp_header['AIRMASS'],
-                        tai_base_date_time + dt.timedelta(seconds=exp_header['TAI-BEG']),
-                        tai_base_date_time + dt.timedelta(seconds=exp_header['TAI-END']))
+                        #Time(tai_base_date_time + dt.timedelta(seconds=exp_header['TAI-BEG'])),
+                        #Time(tai_base_date_time + dt.timedelta(seconds=exp_header['TAI-END'])))
+                        (tai_base_date_time + dt.timedelta(seconds=exp_header['TAI-BEG'])).isoformat(),
+                        (tai_base_date_time + dt.timedelta(seconds=exp_header['TAI-END'])).isoformat())
+        #print (tai_base_date_time + dt.timedelta(seconds=exp_header['TAI-BEG'])).isoformat()
+
     if not gather:
         for name in exposure_data.dtype.names:
             print name, "\t",
@@ -75,14 +81,14 @@ def main():
     )
     parser.add_argument(
         '--output', type=str, default='FITS', metavar='OUTPUT',
-        help='Output format, either of FITS or CSV, defaults to FITS.'
+        help='Output format, either of ''FITS'' or ''CSV'', defaults to FITS.'
     )
     args = parser.parse_args()
 
     if args.plate is not None and args.mjd is not None:
         file_deets(plate=args.plate, mjd=args.mjd, fiber=args.fiber)
-    elif args.file is not None:
-        plates_table = Table.read(args.file, format='ascii')
+    elif args.list_file is not None:
+        plates_table = Table.read(args.list_file, format='ascii')
 
         exposure_table_list = []
         exposure_table = None
@@ -90,9 +96,13 @@ def main():
         progress_bar = ProgressBar(widgets=[Percentage(), Bar()], maxval=len(plates_table)).start()
         counter = 0
         for row in plates_table:
-            exposure_data = file_deets(row['PLATE'], row['MJD'], gather=True)
-            if exposure_data is not None:
-                exposure_table_list.append(Table(exposure_data))
+            try:
+                exposure_data = file_deets(row['PLATE'], row['MJD'], gather=True)
+                if exposure_data is not None:
+                    exposure_table_list.append(Table(exposure_data))
+            except RuntimeError as re:
+                print "Caught runtime:"
+                print re
             counter += 1
             progress_bar.update(counter)
         progress_bar.finish()
@@ -103,9 +113,9 @@ def main():
             else:
                 exposure_table = exposure_table_list[0]
 
-            if args.output == 'FITS':
+            if args.output.upper() == 'CSV':
                 exposure_table.write("exposure_metadata.csv", format="ascii.csv")
-            elif args.output == 'CSV':
+            elif args.output.upper() == 'FITS':
                 exposure_table.write("exposure_metadata.fits", format="fits")
 
 if __name__ == '__main__':

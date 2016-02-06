@@ -36,18 +36,14 @@ def file_deets(plate, mjd, gather=False):
 
     exposure_data = np.empty((spec.num_exposures, ),
                         dtype=[('PLATE', int), ('MJD', int), ('EXP_ID', "|S6"), ('RA', float), ('DEC', float),
-                            ('AZ', float), ('ALT', float), ('AIRMASS', float), ('TAI-BEG', '|S20'), ('TAI-END', '|S20')])
-                            #('TAI-BEG', dt.datetime), ('TAI-END', dt.datetime)])
+                            ('AZ', float), ('ALT', float), ('AIRMASS', float), ('TAI-BEG', '|S25'), ('TAI-END', '|S25')])
     for i, exp in enumerate(spec.exposures.sequence):
         exp_header = spec.get_exposure_hdu(i, 'r1').read_header()
         exposure_data[i] = (int(plate), int(mjd), exp,
                         exp_header['RA'], exp_header['DEC'],
                         exp_header['AZ'], exp_header['ALT'], exp_header['AIRMASS'],
-                        #Time(tai_base_date_time + dt.timedelta(seconds=exp_header['TAI-BEG'])),
-                        #Time(tai_base_date_time + dt.timedelta(seconds=exp_header['TAI-END'])))
                         (tai_base_date_time + dt.timedelta(seconds=exp_header['TAI-BEG'])).isoformat(),
                         (tai_base_date_time + dt.timedelta(seconds=exp_header['TAI-END'])).isoformat())
-        #print (tai_base_date_time + dt.timedelta(seconds=exp_header['TAI-BEG'])).isoformat()
 
     if not gather:
         for name in exposure_data.dtype.names:
@@ -83,6 +79,10 @@ def main():
         '--output', type=str, default='FITS', metavar='OUTPUT',
         help='Output format, either of ''FITS'' or ''CSV'', defaults to FITS.'
     )
+    parser.add_argument(
+        '--dont_gather', action='store_true',
+        help='Flag to prevent storing output in file; just dumps metadata to stdout.'
+    )
     args = parser.parse_args()
 
     if args.plate is not None and args.mjd is not None:
@@ -93,19 +93,22 @@ def main():
         exposure_table_list = []
         exposure_table = None
 
-        progress_bar = ProgressBar(widgets=[Percentage(), Bar()], maxval=len(plates_table)).start()
-        counter = 0
+        if not args.dont_gather:
+            progress_bar = ProgressBar(widgets=[Percentage(), Bar()], maxval=len(plates_table)).start()
+            counter = 0
         for row in plates_table:
             try:
-                exposure_data = file_deets(row['PLATE'], row['MJD'], gather=True)
+                exposure_data = file_deets(row['PLATE'], row['MJD'], gather=not args.dont_gather)
                 if exposure_data is not None:
                     exposure_table_list.append(Table(exposure_data))
             except RuntimeError as re:
                 print "Caught runtime:"
                 print re
-            counter += 1
-            progress_bar.update(counter)
-        progress_bar.finish()
+            if not args.dont_gather:
+                counter += 1
+                progress_bar.update(counter)
+        if not args.dont_gather:
+            progress_bar.finish()
 
         if len(exposure_table_list):
             if len(exposure_table_list) > 1:

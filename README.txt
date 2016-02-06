@@ -36,7 +36,7 @@ metadata.
 3.)  parse_ephemeris.py
     Takes the one or more files from the Horizons JPL service
 (http://ssd.jpl.nasa.gov/horizons.cgi) and converts them into a single CSV
-formatted file for input into the annoted_obs_metadata.py util.  Note that this
+formatted file for input into the annotate_obs_metadata.py util.  Note that this
 util is used to process both solar and lunar ephemeris data, but those should be
 processed separately.  A long header comment in parse_ephermeris.py gives fuller
 details, but the Horizon tool should be used with the following settings:
@@ -62,3 +62,13 @@ handle). RECOMMENDATION:  Just cut'n'paste the header from the existing files in
 ./source_data.
 
 4.)  parse_solar_activity.py
+    Util to take yearly, aggregated NOAA daily sunspot data (from
+ftp://ftp.swpc.noaa.gov/pub/indicies/old_indices/) and parse into a single CSV
+formatted file for input into the annotate_obs_metadata.py util.  (The files of
+interest in the directory are YYYY_DSD.txt, one for each year; current year
+data, if needed, is YYYYQN_DSD.txt, where 'Q' indicates quarter and N is 1-4.)
+Like the Horizons files, these include header comments that need to be chopped
+out (by hand); and again, you should just copy the header form the files in
+./source_data.
+
+5.)  stack.py

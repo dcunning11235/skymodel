@@ -72,3 +72,10 @@ out (by hand); and again, you should just copy the header form the files in
 ./source_data.
 
 5.)  stack.py
+Takes a file containing fibers (PLATE, MJD, FIBER) and stacks fibers for each
+plate/mjd, giving a weighted average, re-sampled output.  This is saved as either
+FITS or csv format file.  Optionally also saves out a file of 'pins' (csv only);
+these are the wavelengths of notable peaks in the spectra.  There are slight
+differences in where peaks are positioned, even in calibrated data (<~ 1 A).
+It would be useful to come up with a way to re-align spectra using e.g. atmospheric
+emissions...

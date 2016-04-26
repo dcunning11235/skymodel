@@ -268,9 +268,9 @@ def save_pins(pins, fiber_group):
 def main():
         parser = argparse.ArgumentParser(
             formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-            description='Stack skt vibers from an PLATE/MJD into a single spectra.')
+            description='Stack sky fibers from a PLATE/MJD into a single spectra.')
         parser.add_argument(
-            '--file', type=str, default=None, metavar='FILE',
+            '--fibers', type=str, default=None, metavar='FIBERS',
             help='File that contains list of PLATE, MJD, FIBER which are to be stacked (by PLATE/MJD).'
         )
         parser.add_argument(
@@ -283,13 +283,12 @@ def main():
         )
         args = parser.parse_args()
 
-        sky_fibers_table = Table.read(args.file, format='ascii')
+        sky_fibers_table = Table.read(args.fibers, format='ascii')
         sky_fibers_table = sky_fibers_table.group_by(["PLATE", "MJD"])
 
         progress_bar = ProgressBar(widgets=[Percentage(), Bar()], maxval=len(sky_fibers_table)).start()
         counter = 0
 
-        #all_pins = []
         for group in sky_fibers_table.groups:
             exposures, stacks, pin_peaks = stack_exposures(group, use_cframe=True)
 

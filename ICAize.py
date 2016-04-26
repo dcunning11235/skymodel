@@ -28,7 +28,7 @@ pickle_file = "{}_{}_pickle.pkl"
 def main():
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        description='Compute ICA components over set of stacked spectra, save those out, and pickle ICA model')
+        description='Compute PCA/ICA/NMF/etc. components over set of stacked spectra, save those out, and pickle model')
     parser.add_argument(
         '--pattern', type=str, default='stacked*exp??????.*', metavar='PATTERN',
         help='File pattern for stacked sky fibers.'
@@ -94,7 +94,7 @@ def main():
     np.savez(data_file.format(args.method, args.which_filter), sources=sources, components=components,
                 exposures=comb_exposure_arr, wavelengths=comb_wavelengths)
     pickle(model, args.path, args.method, args.which_filter)
-    
+
 
 def pickle(model, path='.', method='ICA', filter_str='both', filename=None):
     if filename is None:

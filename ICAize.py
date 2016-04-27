@@ -9,6 +9,9 @@ from astropy.table import join
 from sklearn.decomposition import FastICA
 from sklearn.decomposition import PCA
 from sklearn.decomposition import SparsePCA
+from sklearn.decomposition import KernelPCA
+from sklearn.manifold import Isomap
+
 from sklearn import preprocessing as skpp
 
 import fnmatch
@@ -42,7 +45,15 @@ def main():
         help='Number of ICA/PCA/etc. components'
     )
     parser.add_argument(
-        '--method', type=str, default='ICA', metavar='METHOD', choices=['ICA', 'PCA', 'SPCA', 'NMF']
+        '--n_neighbors', type=int, default=10, metavar='N_NEIGHBORS',
+        help='Number of neighbots for e.g. IsoMap'
+    )
+    parser.add_argument(
+        '--scale', type=bool, default=False, metavar='SCALE',
+        help='Should inputs be scaled?  Will mean subtract and value scale, but does not scale variace.'
+    )
+    parser.add_argument(
+        '--method', type=str, default='ICA', metavar='METHOD', choices=['ICA', 'PCA', 'SPCA', 'NMF', 'ISO', 'KPCA']
         help='Which dim. reduction method to use'
     )
     parser.add_argument(
@@ -90,10 +101,21 @@ def main():
         elif args.which_filter == "em":
             new_flux_arr[:,~filter_split_arr] = 0
 
-    sources, components, model = dim_reduce(flux_arr, args.n_components, args.method, args.max_iter, random_state)
-    np.savez(data_file.format(args.method, args.which_filter), sources=sources, components=components,
-                exposures=comb_exposure_arr, wavelengths=comb_wavelengths)
-    pickle(model, args.path, args.method, args.which_filter)
+    scaled_flux_arr = None
+    ss = None
+    if args.scale:
+        ss = skpp.StandardScaler(with_std=False)
+        scaled_flux_arr = ss.fit_transform(flux_arr)
+    else:
+        scaled_flux_arr = flux_arr
+
+    sources, components, model = dim_reduce(scaled_flux_arr, args.n_components,
+                                    args.n_neighbors, args.method, args.max_iter,
+                                    random_state)
+    np.savez(data_file.format(args.method, args.which_filter), sources=sources,
+                components=components, exposures=comb_exposure_arr,
+                wavelengths=comb_wavelengths)
+    pickle((model, ss), args.path, args.method, args.which_filter)
 
 
 def pickle(model, path='.', method='ICA', filter_str='both', filename=None):
@@ -107,12 +129,12 @@ def unpickle(path='.', method='ICA', filter_str='both', filename=None):
     if filename is None:
         filename = pickle_file.format(method, filter_str)
     output = open(os.path.join(path, filename), 'rb')
-    model = pickle.load(output)
+    model, ss = pickle.load(output)
     output.close()
 
-    return model
+    return model, ss
 
-def dim_reduce(flux_arr, n, method, max_iter, random_state):
+def dim_reduce(flux_arr, n, n_neighbors, method, max_iter, random_state):
     model = None
 
     if method == 'ICA':
@@ -126,10 +148,19 @@ def dim_reduce(flux_arr, n, method, max_iter, random_state):
     elif method == 'NMF':
         model = NMF(n_components = n, solver='cd', max_iter=max_iter,
                     random_state=random_state)
+    elif method == 'ISO':
+        model = Isomap(n_neighbors=n_neighbors, n_components=n, max_iter=max_iter)
+    elif method == 'KPCA':
+        model = KernelPCA(n_components=n, kernel='rbf', fit_inverse_transform=True,
+                        max_iter=max_iter)
 
     sources = model.fit_transform(flux_arr)
     if method == 'ICA':
         components_ = model.mixing_
+    elif method == 'ISO':
+        components_ = model.embedding_
+    elif method == 'KPCA':
+        components_ = model.alphas_
     else:
         components_ = model.components_
 

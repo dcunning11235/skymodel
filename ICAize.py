@@ -53,7 +53,7 @@ def main():
         help='Should inputs be scaled?  Will mean subtract and value scale, but does not scale variace.'
     )
     parser.add_argument(
-        '--method', type=str, default='ICA', metavar='METHOD', choices=['ICA', 'PCA', 'SPCA', 'NMF', 'ISO', 'KPCA']
+        '--method', type=str, default='ICA', metavar='METHOD', choices=['ICA', 'PCA', 'SPCA', 'NMF', 'ISO', 'KPCA'],
         help='Which dim. reduction method to use'
     )
     parser.add_argument(

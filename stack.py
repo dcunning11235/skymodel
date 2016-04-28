@@ -74,7 +74,7 @@ def get_stacked_fiducial_wlen_pixel_offset(target):
 def camera_id(camera, fiber):
     return camera[0] + ("1" if (fiber <= 500) else "2")
 
-def stack_exposures(fiber_group, exposure=None, use_cframe=False):
+def stack_exposures(fiber_group, exposure=None, use_cframe=False, find_pins=False):
     exposure_list = []
     spec_sky_list = None
 
@@ -118,14 +118,14 @@ def stack_exposures(fiber_group, exposure=None, use_cframe=False):
             b_1_data = _get_frame_data(fiber_list_1, 'b1', exp)
             spec_sky_list[i], pin_peaks_list = resample_regular(b_1_data, r_1_data,
                                 spec_sky_list[i], exposure=exp,
-                                use_loglam=False, fiber_list=fiber_list_1)
+                                use_loglam=False, fiber_list=fiber_list_1, find_pins=find_pins)
             total_pin_peaks.extend(pin_peaks_list)
 
             r_2_data = _get_frame_data(fiber_list_2, 'r2', exp)
             b_2_data = _get_frame_data(fiber_list_2, 'b2', exp)
             spec_sky_list[i], pin_peaks_list = resample_regular(b_2_data, r_2_data,
                                 spec_sky_list[i], exposure=exp,
-                                use_loglam=False, fiber_list=fiber_list_2)
+                                use_loglam=False, fiber_list=fiber_list_2, find_pins=find_pins)
             total_pin_peaks.extend(pin_peaks_list)
     else:
         for row in fiber_group:
@@ -139,13 +139,15 @@ def stack_exposures(fiber_group, exposure=None, use_cframe=False):
                                 camera=camera_id('b', row['FIBER']), use_loglam=False, use_ivar=True,
                                 include_wdisp=False)
                 spec_sky_list[exp], pin_peaks_list = resample_regular(b_data, r_data, spec_sky_list[exp],
-                                        use_loglam=False, use_skyexp_fid=False)
+                                        use_loglam=False, use_skyexp_fid=False, find_pins=find_pins)
                 total_pin_peaks.extend(pin_peaks_list)
 
-    return exposure_list, spec_sky_list, np.vstack(total_pin_peaks)
+    if len(total_pin_peaks) > 0:
+        total_pin_peaks = np.vstack(total_pin_peaks)
+    return exposure_list, spec_sky_list, total_pin_peaks
 
 def resample_regular(b_data, r_data, accumulate_result, use_loglam=False, use_skyexp_fid=True,
-                        exposure=None, fiber_list=None):
+                        exposure=None, fiber_list=None, find_pins=False):
     '''
     Fiber exposures are all on slightly different grids, with slightly different starting
     points; and these are not the co-add fiducial grid.  E.g. a 'red' spectra might have 3150
@@ -213,18 +215,22 @@ def resample_regular(b_data, r_data, accumulate_result, use_loglam=False, use_sk
             fiber_list = [None]*len(b_data)
         for b_row, r_row, fiber in zip(b_data, r_data, fiber_list):
             accumulate_result, peak_set = _r_and_a(b_row, passthrough, accumulate_result,
-                                                fiber=fiber, exposure=exposure)
-            pin_peaks_list.append(peak_set) #Only for blue
+                                                find_pins=find_pins, fiber=fiber, exposure=exposure)
+            if peak_set is not None:
+                pin_peaks_list.append(peak_set) #Only for blue
             accumulate_result, peak_set = _r_and_a(r_row, passthrough, accumulate_result,
                                                 find_pins=False)
     else:
         accumulate_result, peak_set = _r_and_a(b_data, passthrough, accumulate_result,
-                                                fiber=fiber_list, exposure=exposure)
-        pin_peaks_list.append(peak_set) #Only for blue
+                                                find_pins=find_pins, fiber=fiber_list, exposure=exposure)
+        if peak_set is not None:
+            pin_peaks_list.append(peak_set) #Only for blue
         accumulate_result, peak_set = _r_and_a(r_data, passthrough, accumulate_result,
                                                 find_pins=False)
 
-    return accumulate_result, np.vstack(pin_peaks_list)
+    if len(pin_peaks_list) > 0:
+        pin_peaks_list = np.vstack(pin_peaks_list)
+    return accumulate_result, pin_peaks_list
 
 def save_stacks(stacks, fiber_group, exposures, output_format):
     plate = fiber_group[0]['PLATE']
@@ -270,7 +276,7 @@ def main():
             formatter_class=argparse.ArgumentDefaultsHelpFormatter,
             description='Stack sky fibers from a PLATE/MJD into a single spectra.')
         parser.add_argument(
-            '--fibers', type=str, default=None, metavar='FIBERS',
+            '--fibers', type=str, default=None, metavar='FIBERS', required=True,
             help='File that contains list of PLATE, MJD, FIBER which are to be stacked (by PLATE/MJD).'
         )
         parser.add_argument(
@@ -290,10 +296,9 @@ def main():
         counter = 0
 
         for group in sky_fibers_table.groups:
-            exposures, stacks, pin_peaks = stack_exposures(group, use_cframe=True)
+            exposures, stacks, pin_peaks = stack_exposures(group, use_cframe=True, find_pins=args.pins)
 
             save_stacks(stacks, group, exposures, args.output)
-
             if args.pins:
                 save_pins(pin_peaks, group)
 

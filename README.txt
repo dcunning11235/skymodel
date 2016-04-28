@@ -79,3 +79,7 @@ these are the wavelengths of notable peaks in the spectra.  There are slight
 differences in where peaks are positioned, even in calibrated data (<~ 1 A).
 It would be useful to come up with a way to re-align spectra using e.g. atmospheric
 emissions...
+
+6.)  arrayize.py
+This is an optional utility that takes all the stacked files (FITS or CSV) and
+saves them in .pkl file.

@@ -14,15 +14,20 @@ from sklearn.decomposition import FactorAnalysis
 from sklearn.manifold import Isomap
 
 from sklearn import preprocessing as skpp
+from sklearn.metrics import explained_variance_score
+from sklearn.metrics import r2_score
 
 from sklearn.cross_validation import cross_val_score
+from sklearn.cross_validation import KFold
+from sklearn.utils.extmath import fast_logdet
+from scipy import linalg
 
 import fnmatch
 import os
 import os.path
 import sys
 import random
-import pickle
+import pickle as pk
 
 from astropy.utils.compat import argparse
 
@@ -46,10 +51,10 @@ def main():
     )
 
     parser.add_argument(
-        '--comp_cv', type=store_true, metavar='COMP_CV',
+        '--comp_cv', action='store_true',
         help='If set, comp_min, comp_max, com_step expected; will attempt to find the best e.g. number of components via CV'
     )
-    parser.add_arguemnt(
+    parser.add_argument(
         '--comp_max', type=int, default=50, metavar='COMP_MAX',
         help='Max number of components to use/test'
     )
@@ -103,8 +108,7 @@ def main():
     args = parser.parse_args()
 
     comb_flux_arr, comb_exposure_arr, comb_ivar_arr, comb_masks, comb_wavelengths = \
-                load_all_in_dir(args.path, use_con_flux=False, recombine_flux=False,
-                                pattern=args.pattern, ivar_cutoff=args.ivar_cutoff)
+                load_all_in_dir(args.path, pattern=args.pattern, ivar_cutoff=args.ivar_cutoff)
 
     filter_split_arr = None
     if args.filter_split_path is not None:
@@ -137,11 +141,14 @@ def main():
         model = get_model(args.method, max_iter=args.max_iter, random_state=random_state)
         scores = []
 
-        n_components = np.arrange(args.comp_min, args.comp_max, args.comp_step)
-        for n in n_comps:
+        n_components = np.arange(args.comp_min, args.comp_max, args.comp_step)
+        for n in n_components:
             model.n_components = n
-            scores.append(np.mean(cross_val_score(model, n, n_jobs=-1)))
+            #scores.append(np.mean(cross_val_score(model, scaled_flux_arr, n_jobs=-1)))
+            scores.append(ev_score_via_CV(scaled_flux_arr, model, args.method))
 
+        print(n_components)
+        print(scores)
         plt.figure()
         plt.plot(n_components, scores, 'b', label='scores')
         plt.xlabel('nb of components')
@@ -160,14 +167,14 @@ def pickle(model, path='.', method='ICA', filter_str='both', filename=None):
     if filename is None:
         filename = pickle_file.format(method, filter_str)
     output = open(os.path.join(path, filename), 'wb')
-    pickle.dump(model, output)
+    pk.dump(model, output)
     output.close()
 
 def unpickle(path='.', method='ICA', filter_str='both', filename=None):
     if filename is None:
         filename = pickle_file.format(method, filter_str)
     output = open(os.path.join(path, filename), 'rb')
-    model, ss = pickle.load(output)
+    model, ss = pk.load(output)
     output.close()
 
     return model, ss
@@ -194,27 +201,31 @@ def get_model(method, n=None, n_neighbors=None, max_iter=None, random_state=None
         model.n_components = n
     if max_iter is not None:
         model.max_iter = max_iter
-    if randome_state is not None
+    if random_state is not None:
         model.random_state = random_state
     if n_neighbors is not None:
         model.n_neighbors = n_neighbors
 
     return model
 
+def get_components(method, model):
+    if method == 'ICA':
+        components = model.mixing_
+    elif method == 'ISO':
+        components = model.embedding_
+    elif method == 'KPCA':
+        components = model.alphas_
+    else:
+        components = model.components_
+
+    return components
+
 def dim_reduce(method, flux_arr, n=None, n_neighbors=None, max_iter=None, random_state=None):
     model = get_model(method, n, n_neighbors, max_iter, random_state)
-
     sources = model.fit_transform(flux_arr)
-    if method == 'ICA':
-        components_ = model.mixing_
-    elif method == 'ISO':
-        components_ = model.embedding_
-    elif method == 'KPCA':
-        components_ = model.alphas_
-    else:
-        components_ = model.components_
+    components = get_components(method, model)
 
-    return source, components_, model
+    return sources, components, model
 
 def load_all_in_dir(path, pattern, ivar_cutoff=0):
     flux_list = []
@@ -254,6 +265,56 @@ def load_all_in_dir(path, pattern, ivar_cutoff=0):
     ivar_arr = np.array(ivar_list)
 
     return flux_arr, exp_arr, ivar_arr, mask_arr, wavelengths
+
+def lll_score_via_CV(flux_arr, model, method, folds=3):
+    print(flux_arr.shape, len(flux_arr))
+    kf = KFold(len(flux_arr), n_folds=folds)
+    scores = []
+    for train_index, test_index in kf:
+        flux_train, flux_test = flux_arr[train_index], flux_arr[test_index]
+        model.fit(flux_train)
+
+        components = get_components(method, model)
+        precision = linalg.inv(np.dot(components, components.T))
+
+        flux_test_sub = flux_test - np.mean(flux_train, axis=0)
+        print(flux_test_sub.shape, len(flux_test_sub))
+        log_like = np.zeros(flux_test.shape[0])
+        print(log_like.shape, len(log_like))
+        log_like = -0.5 * (flux_test_sub * (np.dot(flux_test_sub, precision))).sum(axis=1)
+        log_like -= 0.5 * (flux_test.shape[1] * log(2 * np.pi) - fast_logdet(precision))
+
+        scores.append(np.mean(log_like))
+
+    return np.mean(scores)
+
+def ev_score_via_CV(flux_arr, model, method, folds=3):
+    kf = KFold(len(flux_arr), n_folds=folds)
+    scores = []
+    for train_index, test_index in kf:
+        flux_train, flux_test = flux_arr[train_index], flux_arr[test_index]
+        model.fit(flux_train)
+        flux_conv_test = transform_inverse_transform(flux_test, model, method)
+        #model.inverse_transform(mode.transform(flux_test))
+
+        #scores.append(explained_variance_score(flux_test, flux_conv_test)) #, multioutput='uniform_average'))
+        scores.append(r2_score(flux_test, flux_conv_test))
+
+    return np.mean(scores)
+
+def transform_inverse_transform(flux_arr, model, method):
+    true_invtrans = None
+    if method in ['PCA', 'KPCA']:
+        true_invtrans = model.inverse_transfrom(mode.transform(flux_arr))
+
+    components = get_components(method, model)
+    trans_arr = model.transform(flux_arr)
+    att_invtrans = components*trans_arr[:,:]
+
+    if true_invtrans is not None:
+        print(sum(true_invtrans - att_invtrans))
+
+    return att_invtrans
 
 if __name__ == '__main__':
     main()

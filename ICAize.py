@@ -11,14 +11,19 @@ from sklearn.decomposition import PCA
 from sklearn.decomposition import SparsePCA
 from sklearn.decomposition import KernelPCA
 from sklearn.decomposition import FactorAnalysis
+from sklearn.decomposition import NMF
 from sklearn.manifold import Isomap
 
 from sklearn import preprocessing as skpp
 from sklearn.metrics import explained_variance_score
 from sklearn.metrics import r2_score
 
+from sklearn.covariance import MinCovDet
+from sklearn.covariance import LedoitWolf
+
 from sklearn.cross_validation import cross_val_score
 from sklearn.cross_validation import KFold
+
 from sklearn.utils.extmath import fast_logdet
 from scipy import linalg
 
@@ -31,9 +36,11 @@ import pickle as pk
 
 from astropy.utils.compat import argparse
 
+import arrayize
+
 random_state=1234975
-data_file = "{}_{}_sources_and_mixing.npz"
-pickle_file = "{}_{}_pickle.pkl"
+data_file = "{}_sources_and_mixing.npz"
+pickle_file = "{}_pickle.pkl"
 
 def main():
     parser = argparse.ArgumentParser(
@@ -48,6 +55,10 @@ def main():
     parser.add_argument(
         '--path', type=str, default='.', metavar='PATH',
         help='Path to work from, if not ''.'''
+    )
+    parser.add_argument(
+        '--compacted_path', type=str, default=None, metavar='COMPATED_PATH',
+        help='Path to find compacted/arrayized data; setting this will cause --path, --pattern to be ignored'
     )
 
     parser.add_argument(
@@ -68,6 +79,11 @@ def main():
     )
 
     parser.add_argument(
+        '--comp_plot', action='store_true',
+        help='If set, does a 2-component plot (the first two) for the specified method'
+    )
+
+    parser.add_argument(
         '--n_components', type=int, default=40, metavar='N_COMPONENTS',
         help='Number of ICA/PCA/etc. components'
     )
@@ -76,11 +92,11 @@ def main():
         help='Number of neighbots for e.g. IsoMap'
     )
     parser.add_argument(
-        '--scale', type=bool, default=False, metavar='SCALE',
+        '--scale', action='store_true',
         help='Should inputs be scaled?  Will mean subtract and value scale, but does not scale variace.'
     )
     parser.add_argument(
-        '--method', type=str, default='ICA', metavar='METHOD', choices=['ICA', 'PCA', 'SPCA', 'NMF', 'ISO', 'KPCA', 'FA'],
+        '--method', type=str, default='ICA', metavar='METHOD', #choices=['ICA', 'PCA', 'SPCA', 'NMF', 'ISO', 'KPCA', 'FA'],
         help='Which dim. reduction method to use'
     )
     parser.add_argument(
@@ -92,43 +108,24 @@ def main():
         '--ivar_cutoff', type=float, default=0.001, metavar='IVAR_CUTOFF',
         help='data with inverse variace below cutoff is masked as if ivar==0'
     )
-
-    parser.add_argument(
-        '--filter_split_path', type=str, default=None, metavar='FILTER_SPLIT_PATH',
-        help='Path on which to find filter_split file'
-    )
-    parser.add_argument(
-        '--filter_cutpoint', type=str, default=None, metavar='FILTER_CUTPOINT',
-        help='Point at which to divide between ''normal'' flux and emission flux'
-    )
-    parser.add_argument(
-        '--which_filter', type=str, default='both', metavar='WHICH_FILTER',
-        help='Whether to use ''em''isson, ''nonem''isson, or ''both'''
-    )
     args = parser.parse_args()
 
-    comb_flux_arr, comb_exposure_arr, comb_ivar_arr, comb_masks, comb_wavelengths = \
+    if args.compacted_path is not None:
+        comb_flux_arr, comb_exposure_arr, comb_ivar_arr, comb_wavelengths = arrayize.load_compacted_data(args.compacted_path)
+        comb_masks = comb_ivar_arr <= args.ivar_cutoff
+    else:
+        comb_flux_arr, comb_exposure_arr, comb_ivar_arr, comb_masks, comb_wavelengths = \
                 load_all_in_dir(args.path, pattern=args.pattern, ivar_cutoff=args.ivar_cutoff)
-
-    filter_split_arr = None
-    if args.filter_split_path is not None:
-        fstable = Table.read(args.filter_split_path, format="ascii.csv")
-	filter_split_arr = fstable["flux_kurtosis_per_wl"] < args.filter_cutpoint
 
     mask_summed = np.sum(comb_masks, axis=0)
     min_val_ind = np.min(np.where(mask_summed == 0))
     max_val_ind = np.max(np.where(mask_summed == 0))
     print "For data set, minimum and maximum valid indecies are:", (min_val_ind, max_val_ind)
+    for i in range(comb_flux_arr.shape[0]):
+        comb_flux_arr[i,:min_val_ind] = 0
+        comb_flux_arr[i,max_val_ind+1:] = 0
 
     flux_arr = comb_flux_arr
-    if filter_split_arr is not None and args.which_filter != "both":
-        flux_arr = np.array(comb_flux_arr, copy=True)
-
-        if args.which_filter == "nonem":
-            new_flux_arr[:,filter_split_arr] = 0
-        elif args.which_filter == "em":
-            new_flux_arr[:,~filter_split_arr] = 0
-
     scaled_flux_arr = None
     ss = None
     if args.scale:
@@ -137,45 +134,104 @@ def main():
     else:
         scaled_flux_arr = flux_arr
 
-    if args.comp_cv:
-        model = get_model(args.method, max_iter=args.max_iter, random_state=random_state)
-        scores = []
-
-        n_components = np.arange(args.comp_min, args.comp_max, args.comp_step)
-        for n in n_components:
-            model.n_components = n
-            #scores.append(np.mean(cross_val_score(model, scaled_flux_arr, n_jobs=-1)))
-            scores.append(ev_score_via_CV(scaled_flux_arr, model, args.method))
-
-        print(n_components)
-        print(scores)
-        plt.figure()
-        plt.plot(n_components, scores, 'b', label='scores')
-        plt.xlabel('nb of components')
-        plt.ylabel('CV scores')
-        plt.show()
-    else:
-        sources, components, model = dim_reduce(args.method, scaled_flux_arr,
+    if args.comp_plot:
+        sources, components, model = dim_reduce(args.method, flux_arr if args.method == 'NMF' else scaled_flux_arr,
                                         args.n_components, args.n_neighbors,
                                         args.max_iter, random_state)
-        np.savez(data_file.format(args.method, args.which_filter), sources=sources,
-                    components=components, exposures=comb_exposure_arr,
-                    wavelengths=comb_wavelengths)
-        pickle((model, ss), args.path, args.method, args.which_filter)
+        trans_flux_arr = model.transform(flux_arr if args.method == 'NMF' else scaled_flux_arr)
 
-def pickle(model, path='.', method='ICA', filter_str='both', filename=None):
-    if filename is None:
-        filename = pickle_file.format(method, filter_str)
-    output = open(os.path.join(path, filename), 'wb')
-    pk.dump(model, output)
-    output.close()
+        if args.n_components == 2:
+            plt.scatter(trans_flux_arr[:,0], trans_flux_arr[:,1])
+        elif args.n_components == 3:
+            f, (ax1, ax2) = plt.subplots(2)
+            ax1.scatter(trans_flux_arr[:,0], trans_flux_arr[:,1])
+            ax2.scatter(trans_flux_arr[:,1], trans_flux_arr[:,2])
+        elif args.n_components == 4:
+            f, (ax1, ax2, ax3) = plt.subplots(3)
+            ax1.scatter(trans_flux_arr[:,0], trans_flux_arr[:,1])
+            ax2.scatter(trans_flux_arr[:,1], trans_flux_arr[:,2])
+            ax3.scatter(trans_flux_arr[:,2], trans_flux_arr[:,3])
+        plt.show()
+    elif args.comp_cv:
+        methods = args.method.split(',')
+        fig, ax1 = plt.subplots()
+        ax2 = ax1.twinx()
 
-def unpickle(path='.', method='ICA', filter_str='both', filename=None):
+        for method in methods:
+            model = get_model(method, max_iter=args.max_iter, random_state=random_state)
+            scores = []
+            ll_scores = []
+
+            n_components = np.arange(args.comp_min, args.comp_max, args.comp_step)
+            for n in n_components:
+                print("Cross validating for n=", n, "on method", method)
+
+                model.n_components = n
+                scores.append(ev_score_via_CV(flux_arr if method == 'NMF' else scaled_flux_arr, model, method))
+
+                if method == 'FA' or method == 'PCA':
+                    ll_scores.append(ll_score_via_CV(scaled_flux_arr, model, method))
+
+            if method == 'FA' or method == 'PCA':
+                ax2.axhline(cov_mcd_score(scaled_flux_arr, args.scale), color='violet', label='MCD Cov', linestyle='--')
+                ax2.axhline(cov_lw_scoare(scaled_flux_arr, args.scale), color='orange', label='LW Cov', linestyle='--')
+
+            print(n_components)
+            print(scores)
+            ax1.plot(n_components, scores, label=(method + ' scores'))
+
+            if len(ll_scores) > 0:
+                print(ll_scores)
+                ax2.plot(n_components, ll_scores, '-.', label=(method + ' ll scores'))
+
+        ax1.set_xlabel('nb of components')
+        ax1.set_ylabel('CV scores', figure=fig)
+
+        ax1.legend(loc='lower left')
+        ax2.legend(loc='lower right')
+
+        plt.show()
+    else:
+        sources, components, model = dim_reduce(args.method, flux_arr if args.method == 'NMF' else scaled_flux_arr,
+                                        args.n_components, args.n_neighbors,
+                                        args.max_iter, random_state)
+        serialize_data(sources, components, comb_exposure_arr, comb_wavelengths,
+                        args.path, args.method)
+        pickle_model((model, ss), args.path, args.method)
+
+def serialize_data(sources, components, exposures, wavelengths, path='.', method='ICA',
+                    filename=None):
     if filename is None:
-        filename = pickle_file.format(method, filter_str)
-    output = open(os.path.join(path, filename), 'rb')
-    model, ss = pk.load(output)
-    output.close()
+        filename = data_file.format(method)
+    np.savez(os.path.join(path, filename), sources=sources, components=components,
+            exposures=exposures, wavelengths=wavelengths)
+
+def deserialize_data(path='.', method='ICA', filename=None):
+    if filename is None:
+        filename = data_file.format(method)
+    npz = np.load(os.path.join(path, filename))
+
+    sources = npz['sources']
+    exposures = npz['exposures']
+    wavelengths = npz['wavelengths']
+    components = npz['components']
+
+    npz.close()
+    return sources, components, exposures, wavelengths
+
+def pickle_model(model, path='.', method='ICA', filename=None):
+    if filename is None:
+        filename = pickle_file.format(method)
+    file = open(os.path.join(path, filename), 'wb')
+    pk.dump(model, file)
+    file.close()
+
+def unpickle_model(path='.', method='ICA', filename=None):
+    if filename is None:
+        filename = pickle_file.format(method)
+    file = open(os.path.join(path, filename), 'rb')
+    model, ss = pk.load(file)
+    file.close()
 
     return model, ss
 
@@ -187,13 +243,13 @@ def get_model(method, n=None, n_neighbors=None, max_iter=None, random_state=None
     elif method == 'PCA':
         model = PCA()
     elif method == 'SPCA':
-        model = SparsePCA(n_jobs=-1)
+        model = SparsePCA()
     elif method == 'NMF':
         model = NMF(solver='cd')
     elif method == 'ISO':
         model = Isomap()
     elif method == 'KPCA':
-        model = KernelPCA(kernel='rbf', fit_inverse_transform=True)
+        model = KernelPCA(kernel='rbf', fit_inverse_transform=False, gamma=1, alpha=0.0001)
     elif method == 'FA':
         model = FactorAnalysis()
 
@@ -209,9 +265,7 @@ def get_model(method, n=None, n_neighbors=None, max_iter=None, random_state=None
     return model
 
 def get_components(method, model):
-    if method == 'ICA':
-        components = model.mixing_
-    elif method == 'ISO':
+    if method == 'ISO':
         components = model.embedding_
     elif method == 'KPCA':
         components = model.alphas_
@@ -266,55 +320,68 @@ def load_all_in_dir(path, pattern, ivar_cutoff=0):
 
     return flux_arr, exp_arr, ivar_arr, mask_arr, wavelengths
 
-def lll_score_via_CV(flux_arr, model, method, folds=3):
-    print(flux_arr.shape, len(flux_arr))
+def ll_score_via_CV(flux_arr, model, method, folds=3):
     kf = KFold(len(flux_arr), n_folds=folds)
     scores = []
     for train_index, test_index in kf:
         flux_train, flux_test = flux_arr[train_index], flux_arr[test_index]
         model.fit(flux_train)
-
-        components = get_components(method, model)
-        precision = linalg.inv(np.dot(components, components.T))
-
-        flux_test_sub = flux_test - np.mean(flux_train, axis=0)
-        print(flux_test_sub.shape, len(flux_test_sub))
-        log_like = np.zeros(flux_test.shape[0])
-        print(log_like.shape, len(log_like))
-        log_like = -0.5 * (flux_test_sub * (np.dot(flux_test_sub, precision))).sum(axis=1)
-        log_like -= 0.5 * (flux_test.shape[1] * log(2 * np.pi) - fast_logdet(precision))
-
-        scores.append(np.mean(log_like))
+        scores.append(model.score(flux_test))
 
     return np.mean(scores)
 
 def ev_score_via_CV(flux_arr, model, method, folds=3):
     kf = KFold(len(flux_arr), n_folds=folds)
     scores = []
+
     for train_index, test_index in kf:
         flux_train, flux_test = flux_arr[train_index], flux_arr[test_index]
-        model.fit(flux_train)
-        flux_conv_test = transform_inverse_transform(flux_test, model, method)
-        #model.inverse_transform(mode.transform(flux_test))
 
-        #scores.append(explained_variance_score(flux_test, flux_conv_test)) #, multioutput='uniform_average'))
-        scores.append(r2_score(flux_test, flux_conv_test))
+        if method == 'KPCA':
+            model.fit_inverse_transform = False
+            model.fit(flux_train)
+
+            sqrt_lambdas = np.diag(np.sqrt(model.lambdas_))
+            X_transformed = np.dot(model.alphas_, sqrt_lambdas)
+            n_samples = X_transformed.shape[0]
+            K = model._get_kernel(X_transformed)
+            K.flat[::n_samples + 1] += model.alpha
+
+            model.dual_coef_ = linalg.solve(K, flux_train)
+            model.X_transformed_fit_ = X_transformed
+            model.fit_inverse_transform = True
+
+            flux_conv_test = transform_inverse_transform(flux_test, model, method)
+        else:
+            flux_conv_test = transform_inverse_transform(flux_test, model, method)
+
+        scores.append(explained_variance_score(flux_test, flux_conv_test, multioutput='uniform_average'))
 
     return np.mean(scores)
 
 def transform_inverse_transform(flux_arr, model, method):
-    true_invtrans = None
-    if method in ['PCA', 'KPCA']:
-        true_invtrans = model.inverse_transfrom(mode.transform(flux_arr))
+    if method in ['PCA', 'KPCA', 'ICA']:
+        att_invtrans = model.inverse_transform(model.transform(flux_arr))
+    else:
+        components = get_components(method, model)
+        trans_arr = model.transform(flux_arr)
 
-    components = get_components(method, model)
-    trans_arr = model.transform(flux_arr)
-    att_invtrans = components*trans_arr[:,:]
-
-    if true_invtrans is not None:
-        print(sum(true_invtrans - att_invtrans))
+        att_invtrans = np.zeros(shape=(trans_arr.shape[0], components.shape[1]), dtype=float)
+        for flux_n in xrange(trans_arr.shape[0]):
+            for comp_n in xrange(components.shape[0]):
+                rec_comp = trans_arr[flux_n, comp_n] * components[comp_n]
+                att_invtrans[flux_n] += rec_comp
 
     return att_invtrans
+
+def cov_mcd_score(flux_arr, assume_centered):
+    mcd = MinCovDet(assume_centered=assume_centered)
+    return np.mean(cross_val_score(mcd, flux_arr))
+
+def cov_lw_score(flux_arr, assume_centered):
+    lw = LedoitWolf(assume_centered=assume_centered)
+    return np.mean(cross_val_score(lw, flux_arr))
+
 
 if __name__ == '__main__':
     main()

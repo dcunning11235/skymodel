@@ -22,7 +22,7 @@ def main():
         help='Path to work from, if not ''.'''
     )
     parser.add_argument(
-        '--rewrite', action='store_true', metavar='REWRITE',
+        '--rewrite', action='store_true',
         help='Flag to control whether or not negative values are replaced with 0'
     )
     parser.add_argument(
@@ -39,17 +39,17 @@ def main():
     for file in os.listdir(args.path):
         if fnmatch.fnmatch(file, args.pattern):
             if file.endswith('.fits'):
-                data = Table.read(os.path.join(path, file), format="fits")
+                data = Table.read(os.path.join(args.path, file), format="fits")
             elif file.endswith('.csv'):
-                data = Table.read(os.path.join(path, file), format="ascii.csv")
+                data = Table.read(os.path.join(args.path, file), format="ascii.csv")
 
-            mask = data['ivar'] == 0
+            #mask = data['ivar'] == 0
 
             #Get rid of shit like this, if going to not just be my hacky util
             exp = int(file.split("-")[2][3:9])
 
             neg_mask = data['flux'] < -(args.ltzero)
-            set_neg_mask = neg_mask & ~mask
+            set_neg_mask = neg_mask #& ~mask
             if np.any(set_neg_mask):
                 print file, exp, data['wavelength'][set_neg_mask][0], data['flux'][set_neg_mask][0],
                 if not args.rewrite:
@@ -57,11 +57,12 @@ def main():
                 else:
                     print "REPAIRING..."
                     data['ivar'][set_neg_mask] = 0
+                    data['flux'][set_neg_mask] = 0
 
                     if file.endswith('.fits'):
-                        data.write(os.path.join(path, file), format="fits")
+                        data.write(os.path.join(args.path, file), format="fits", overwrite=True)
                     elif file.endswith('.csv'):
-                        data.write(os.path.join(path, file), format="ascii.csv")
+                        data.write(os.path.join(args.path, file), format="ascii.csv", overwrite=True)
 
 if __name__ == '__main__':
     main()

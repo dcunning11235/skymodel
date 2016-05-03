@@ -16,7 +16,7 @@ from sklearn.decomposition import DictionaryLearning
 from sklearn.manifold import Isomap
 
 from sklearn import preprocessing as skpp
-from sklearn.metrics import explained_variance_score
+from sklearn.metrics import (explained_variance_score, mean_squared_error, median_absolute_error, r2_score)
 from sklearn.metrics import r2_score
 
 from sklearn.covariance import MinCovDet
@@ -43,11 +43,18 @@ random_state=1234975
 data_file = "{}_sources_and_mixing.npz"
 pickle_file = "{}_pickle.pkl"
 
+def action_build(args):
+    pass
+
+def action_compare(args):
+    print(args)
+
 def main():
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         description='Compute PCA/ICA/NMF/etc. components over set of stacked spectra, save those out, and pickle model'
     )
+    subparsers = parser.add_subparsers(dest='subparser_name')
 
     parser.add_argument(
         '--pattern', type=str, default='stacked*exp??????.*', metavar='PATTERN',
@@ -62,46 +69,59 @@ def main():
         help='Path to find compacted/arrayized data; setting this will cause --path, --pattern to be ignored'
     )
 
-    parser.add_argument(
-        '--comp_cv', action='store_true',
-        help='If set, comp_min, comp_max, com_step expected; will attempt to find the best e.g. number of components via CV'
-    )
-    parser.add_argument(
-        '--comp_max', type=int, default=50, metavar='COMP_MAX',
+
+    parser_compare = subparsers.add_parser('compare')
+    parser_compare.set_defaults(func=action_compare)
+    parser_compare.add_argument(
+        '--max_components', type=int, default=50, metavar='COMP_MAX',
         help='Max number of components to use/test'
     )
-    parser.add_argument(
-        '--comp_min', type=int, default=0, metavar='COMP_MIN',
+    parser_compare.add_argument(
+        '--min_components', type=int, default=0, metavar='COMP_MIN',
         help='Min number of compoenents to use/test'
     )
-    parser.add_argument(
-        '--comp_step', type=int, default=5, metavar='COMP_STEP',
+    parser_compare.add_argument(
+        '--step_size', type=int, default=5, metavar='COMP_STEP',
         help='Step size from comp_min to comp_max'
     )
-
-    parser.add_argument(
-        '--comp_plot', action='store_true',
-        help='If set, does a 2-component plot (the first two) for the specified method'
+    parser_compare.add_argument(
+        '--comparison', choices=['EXP_VAR', 'R2', 'MSE', 'MAE'], nargs='*', default=['EXP_VAR'],
+        help='Comparison methods: Explained variance (score), R2 (score), mean sq. error (loss), MEDIAN absolute error (loss)'
+    )
+    parser_compare.add_argument(
+        '--mle_if_avail', action='store_true',
+        help='In additon to --comparison, include MLE if PCA or FA methods specified'
     )
 
-    parser.add_argument(
+
+    parser_build = subparsers.add_parser('build')
+    parser_build.add_argument(
         '--n_components', type=int, default=40, metavar='N_COMPONENTS',
         help='Number of ICA/PCA/etc. components'
     )
-    parser.add_argument(
+    parser_build.add_argument(
         '--n_neighbors', type=int, default=10, metavar='N_NEIGHBORS',
         help='Number of neighbots for e.g. IsoMap'
     )
+
+
+    parser.add_argument(
+        '--method', type=str, default=['ICA'], metavar='METHOD',
+        choices=['ICA', 'PCA', 'SPCA', 'NMF', 'ISO', 'KPCA', 'FA', 'DL'], nargs='+',
+        help='Which dim. reduction method to use'
+    )
+
+
     parser.add_argument(
         '--scale', action='store_true',
         help='Should inputs be scaled?  Will mean subtract and value scale, but does not scale variace.'
     )
     parser.add_argument(
-        '--method', type=str, default='ICA', metavar='METHOD', #choices=['ICA', 'PCA', 'SPCA', 'NMF', 'ISO', 'KPCA', 'FA'],
-        help='Which dim. reduction method to use'
+        '--ivar_cutoff', type=float, default=0.001, metavar='IVAR_CUTOFF',
+        help='data with inverse variace below cutoff is masked as if ivar==0'
     )
     parser.add_argument(
-        '--max_iter', type=int, default=1200, metavar='MAX_ITER',
+        '--n_iter', type=int, default=1200, metavar='MAX_ITER',
         help='Maximum number of iterations to allow for convergence.  For SDSS data 1000 is a safe number of ICA, while SPCA requires larger values e.g. ~2000 to ~2500'
     )
     parser.add_argument(
@@ -109,12 +129,9 @@ def main():
         help='N_JOBS'
     )
 
-    parser.add_argument(
-        '--ivar_cutoff', type=float, default=0.001, metavar='IVAR_CUTOFF',
-        help='data with inverse variace below cutoff is masked as if ivar==0'
-    )
     args = parser.parse_args()
 
+    print(args.compacted_path)
     if args.compacted_path is not None:
         comb_flux_arr, comb_exposure_arr, comb_ivar_arr, comb_wavelengths = arrayize.load_compacted_data(args.compacted_path)
         comb_masks = comb_ivar_arr <= args.ivar_cutoff
@@ -130,7 +147,7 @@ def main():
         comb_flux_arr[i,:min_val_ind] = 0
         comb_flux_arr[i,max_val_ind+1:] = 0
 
-    flux_arr = comb_flux_arr.astype(dtype=np.float64)
+    flux_arr = comb_flux_arr #comb_flux_arr.astype(dtype=np.float64)
     scaled_flux_arr = None
     ss = None
     if args.scale:
@@ -139,55 +156,42 @@ def main():
     else:
         scaled_flux_arr = flux_arr
 
-    if args.comp_plot:
-        sources, components, model = dim_reduce(args.method, flux_arr if args.method == 'NMF' else scaled_flux_arr,
-                                        args.n_components, args.n_neighbors,
-                                        args.max_iter, random_state)
-        trans_flux_arr = model.transform(flux_arr if args.method == 'NMF' else scaled_flux_arr)
-
-        if args.n_components == 2:
-            plt.scatter(trans_flux_arr[:,0], trans_flux_arr[:,1])
-        elif args.n_components == 3:
-            f, (ax1, ax2) = plt.subplots(2)
-            ax1.scatter(trans_flux_arr[:,0], trans_flux_arr[:,1])
-            ax2.scatter(trans_flux_arr[:,1], trans_flux_arr[:,2])
-        elif args.n_components == 4:
-            f, (ax1, ax2, ax3) = plt.subplots(3)
-            ax1.scatter(trans_flux_arr[:,0], trans_flux_arr[:,1])
-            ax2.scatter(trans_flux_arr[:,1], trans_flux_arr[:,2])
-            ax3.scatter(trans_flux_arr[:,2], trans_flux_arr[:,3])
-        plt.show()
-    elif args.comp_cv:
-        methods = args.method.split(',')
+    if args.subparser_name == 'compare':
         fig, ax1 = plt.subplots()
         ax2 = ax1.twinx()
 
-        for method in methods:
-            model = get_model(method, max_iter=args.max_iter, random_state=random_state, n_jobs=args.n_jobs)
-            scores = []
+        for method in args.method:
+            model = get_model(method, max_iter=args.n_iter, random_state=random_state, n_jobs=args.n_jobs)
+            scores = {}
             ll_scores = []
+            mles_and_covs = args.mle_if_avail and (method == 'FA' or method == 'PCA')
 
-            n_components = np.arange(args.comp_min, args.comp_max, args.comp_step)
+            n_components = np.arange(args.min_components, args.max_components+1, args.step_size)
             for n in n_components:
                 print("Cross validating for n=", n, "on method", method)
 
                 model.n_components = n
-                scores.append(ev_score_via_CV(flux_arr if method == 'NMF' else scaled_flux_arr, model, method))
 
-                if method == 'FA' or method == 'PCA':
+                for comparison in args.comparison:
+                    if comparison not in scores:
+                        scores[comparison] = []
+                    scores[comparison].append(score_via_CV(comparison, flux_arr if method == 'NMF' else scaled_flux_arr, model, method))
+
+                if mles_and_covs:
                     ll_scores.append(ll_score_via_CV(scaled_flux_arr, model, method))
 
-            if method == 'FA' or method == 'PCA':
+            if mles_and_covs:
                 ax2.axhline(cov_mcd_score(scaled_flux_arr, args.scale), color='violet', label='MCD Cov', linestyle='--')
                 ax2.axhline(cov_lw_scoare(scaled_flux_arr, args.scale), color='orange', label='LW Cov', linestyle='--')
 
             print(n_components)
             print(scores)
-            ax1.plot(n_components, scores, label=(method + ' scores'))
+            for keys, score in scores:
+                ax1.plot(n_components, score, label=method + ':' + keys + ' scores')
 
             if len(ll_scores) > 0:
                 print(ll_scores)
-                ax2.plot(n_components, ll_scores, '-.', label=(method + ' ll scores'))
+                ax2.plot(n_components, ll_scores, '-.', label=method + ' ll scores')
 
         ax1.set_xlabel('nb of components')
         ax1.set_ylabel('CV scores', figure=fig)
@@ -339,7 +343,7 @@ def ll_score_via_CV(flux_arr, model, method, folds=3):
 
     return np.mean(scores)
 
-def ev_score_via_CV(flux_arr, model, method, folds=3):
+def score_via_CV(score_method, flux_arr, model, method, folds=3):
     kf = KFold(len(flux_arr), n_folds=folds)
     scores = []
 
@@ -365,7 +369,16 @@ def ev_score_via_CV(flux_arr, model, method, folds=3):
             model.fit(flux_train)
             flux_conv_test = transform_inverse_transform(flux_test, model, method)
 
-        scores.append(explained_variance_score(flux_test, flux_conv_test, multioutput='uniform_average'))
+        if score_method == 'EXP_VAR':
+            score_func = explained_variance_score
+        elif score_method == 'R2':
+            score_func = r2_score
+        elif score_method == 'MSE':
+            score_func = mean_squared_error
+        elif score_method == 'MAE':
+            score_func = median_absolute_error
+
+        scores.append(score_func(flux_test, flux_conv_test, multioutput='uniform_average'))
 
     return np.mean(scores)
 

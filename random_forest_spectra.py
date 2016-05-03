@@ -123,6 +123,11 @@ def main():
     )
 
     parser.add_argument(
+        '--n_jobs', type=int, default=1, metavar='N_JOBS',
+        help='N_JOBS'
+    )
+
+    parser.add_argument(
         '--model', type=str, choices=['ET', 'RF', 'GP', 'KNN'], default='ET',
         help='Which model type to use: ET (Extra Trees), RF (Random Forest), GP (Gaussian Process), or KNN'
     )
@@ -169,7 +174,7 @@ def main():
         pdist = get_param_distribution_for_model(args.model)
         rcv = RandomizedSearchCV(predictive_model, param_distributions=pdist,
                             n_iter=args.hyper_fit_iters, random_state=RANDOM_STATE,
-                            error_score=0, cv=args.test_folds)
+                            error_score=0, cv=args.test_folds, n_jobs=args.n_jobs)
 
         rcv.fit(X_arr, Y_arr)
 

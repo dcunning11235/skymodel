@@ -104,6 +104,10 @@ def main():
         '--max_iter', type=int, default=1200, metavar='MAX_ITER',
         help='Maximum number of iterations to allow for convergence.  For SDSS data 1000 is a safe number of ICA, while SPCA requires larger values e.g. ~2000 to ~2500'
     )
+    parser.add_argument(
+        '--n_jobs', type=int, default=None, metavar='N_JOBS',
+        help='N_JOBS'
+    )
 
     parser.add_argument(
         '--ivar_cutoff', type=float, default=0.001, metavar='IVAR_CUTOFF',
@@ -159,7 +163,7 @@ def main():
         ax2 = ax1.twinx()
 
         for method in methods:
-            model = get_model(method, max_iter=args.max_iter, random_state=random_state)
+            model = get_model(method, max_iter=args.max_iter, random_state=random_state, n_jobs=args.n_jobs)
             scores = []
             ll_scores = []
 
@@ -236,7 +240,7 @@ def unpickle_model(path='.', method='ICA', filename=None):
 
     return model, ss
 
-def get_model(method, n=None, n_neighbors=None, max_iter=None, random_state=None):
+def get_model(method, n=None, n_neighbors=None, max_iter=None, random_state=None, n_jobs=None):
     model = None
 
     if method == 'ICA':
@@ -264,6 +268,8 @@ def get_model(method, n=None, n_neighbors=None, max_iter=None, random_state=None
         model.random_state = random_state
     if n_neighbors is not None:
         model.n_neighbors = n_neighbors
+    if n_jobs is not None:
+        model.n_jobs = n_jobs
 
     return model
 

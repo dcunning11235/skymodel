@@ -8,6 +8,7 @@ from astropy.table import join
 
 from sklearn import ensemble
 from sklearn import gaussian_process
+from sklearn import neighbors
 from sklearn.decomposition import FastICA
 from sklearn.decomposition import SparsePCA
 from sklearn import preprocessing as skpp
@@ -199,11 +200,11 @@ def get_param_distribution_for_model(model_str):
         pdist['corr'] = ['absolute_exponential', 'squared_exponential', 'generalized_exponential', 'cubic', 'linear']
         pdist['thetaL'] = sp_uniform(1e-5, 3e-1)
         pdist['thetaU'] = sp_uniform(7e-1, 1)
-        pdist['random_start'] = sp_randint(25, 200)
+        pdist['random_start'] = sp_randint(2, 10)
     elif model_str == 'KNN':
         pdist['weights'] = ['uniform', 'distance']
         pdist['metric'] = ['euclidean', 'manhattan', 'chebyshev']
-
+        pdist['n_neighbors'] = sp_randint(2, 50)
     return pdist
 
 def get_model(model_str):

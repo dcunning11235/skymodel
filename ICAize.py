@@ -12,6 +12,7 @@ from sklearn.decomposition import SparsePCA
 from sklearn.decomposition import KernelPCA
 from sklearn.decomposition import FactorAnalysis
 from sklearn.decomposition import NMF
+from sklearn.decomposition import DictionaryLearning
 from sklearn.manifold import Isomap
 
 from sklearn import preprocessing as skpp
@@ -125,7 +126,7 @@ def main():
         comb_flux_arr[i,:min_val_ind] = 0
         comb_flux_arr[i,max_val_ind+1:] = 0
 
-    flux_arr = comb_flux_arr
+    flux_arr = comb_flux_arr.astype(dtype=np.float64)
     scaled_flux_arr = None
     ss = None
     if args.scale:
@@ -252,6 +253,8 @@ def get_model(method, n=None, n_neighbors=None, max_iter=None, random_state=None
         model = KernelPCA(kernel='rbf', fit_inverse_transform=False, gamma=1, alpha=0.0001)
     elif method == 'FA':
         model = FactorAnalysis()
+    elif method == 'DL':
+        model = DictionaryLearning(split_sign=True, fit_algorithm='cd', alpha=1)
 
     if n is not None:
         model.n_components = n
@@ -353,6 +356,7 @@ def ev_score_via_CV(flux_arr, model, method, folds=3):
 
             flux_conv_test = transform_inverse_transform(flux_test, model, method)
         else:
+            model.fit(flux_train)
             flux_conv_test = transform_inverse_transform(flux_test, model, method)
 
         scores.append(explained_variance_score(flux_test, flux_conv_test, multioutput='uniform_average'))

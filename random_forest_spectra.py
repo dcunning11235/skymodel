@@ -13,6 +13,9 @@ from sklearn import svm
 from sklearn.decomposition import FastICA
 from sklearn.decomposition import SparsePCA
 
+from sklearn.metrics import make_scorer
+from sklearn.metrics import r2_score
+from sklearn.metrics import mean_squared_error
 
 from sklearn import preprocessing as skpp
 from sklearn.pipeline import make_pipeline
@@ -115,6 +118,10 @@ def main():
         '--save_best', action='store_true',
         help='Whether or not to save the (last/best) model built for e.g. --hyper_fit'
     )
+    parser_compare.add_argument(
+        '--scorer', type=str, choices=['R2', 'MAE', 'MSE'], default='R2',
+        help='Which scoring method to use to determine ranking of model instances.'
+    )
 
 
     parser.add_argument(
@@ -165,9 +172,19 @@ def main():
 
     if args.subparser_name == 'compare':
         pdist = get_param_distribution_for_model(args.model)
+
+        scorer = None
+        if args.scorer == 'R2':
+            scorer = make_scorer(r2_score, multioutput='uniform_average')
+        elif args.scorer == 'MAE':
+            scorer = make_scorer(MAE, greater_is_better=False)
+        elif args.scorer == 'MSE':
+            scorer = make_scorer(mean_squared_error, multioutput='uniform_average')
+
         rcv = RandomizedSearchCV(predictive_model, param_distributions=pdist,
                             n_iter=args.iters, random_state=RANDOM_STATE,
-                            error_score=0, cv=args.folds, n_jobs=args.n_jobs)
+                            error_score=0, cv=args.folds, n_jobs=args.n_jobs,
+                            scoring=scorer)
         rcv.fit(X_arr, Y_arr)
 
         print(rcv.best_score_)
@@ -182,12 +199,15 @@ def main():
     elif args.test_folds is not None:
         pass
 
+def MAE(Y, y):
+    return np.mean(np.median(np.abs(Y - y), axis=1))
+
 def get_param_distribution_for_model(model_str):
     pdist = {}
 
     if model_str in ['ET', 'RF']:
         pdist['n_estimators'] = sp_randint(100, 500)
-        pdist['max_features'] = sp_uniform(0.5, 1)
+        pdist['max_features'] = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1]#sp_uniform(0.5, 1)
         pdist['min_samples_split'] = sp_randint(1, 15)
         pdist['min_samples_leaf'] = sp_randint(1, 15)
         pdist['bootstrap'] = [True, False]

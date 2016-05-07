@@ -6,6 +6,7 @@ from astropy.table import Column
 from astropy.table import vstack
 from astropy.table import join
 
+from sklearn.base import clone as est_clone
 from sklearn.decomposition import FastICA
 from sklearn.decomposition import PCA
 from sklearn.decomposition import SparsePCA
@@ -34,6 +35,8 @@ import os.path
 import sys
 import random
 import pickle as pk
+from multiprocessing.pool import ThreadPool
+import itertools as it
 
 from astropy.utils.compat import argparse
 
@@ -92,6 +95,10 @@ def main():
         '--mle_if_avail', action='store_true',
         help='In additon to --comparison, include MLE if PCA or FA methods specified'
     )
+    parser_compare.add_argument(
+        '--plot_example_reconstruction', action='store_true',
+        help='Pick a random spectrum, plot its actual and reconstructed versions'
+    )
 
 
     parser_build = subparsers.add_parser('build')
@@ -147,7 +154,10 @@ def main():
         comb_flux_arr[i,:min_val_ind] = 0
         comb_flux_arr[i,max_val_ind+1:] = 0
 
-    flux_arr = comb_flux_arr #comb_flux_arr.astype(dtype=np.float64)
+    if 'DL' in args.method:
+        flux_arr = comb_flux_arr.astype(dtype=np.float64)
+    else:
+        flux_arr = comb_flux_arr
     scaled_flux_arr = None
     ss = None
     if args.scale:
@@ -163,35 +173,32 @@ def main():
         for method in args.method:
             model = get_model(method, max_iter=args.n_iter, random_state=random_state, n_jobs=args.n_jobs)
             scores = {}
-            ll_scores = []
             mles_and_covs = args.mle_if_avail and (method == 'FA' or method == 'PCA')
 
             n_components = np.arange(args.min_components, args.max_components+1, args.step_size)
             for n in n_components:
-                print("Cross validating for n=", n, "on method", method)
+                print("Cross validating for n=" + str(n) + " on method " + method)
 
                 model.n_components = n
 
-                for comparison in args.comparison:
-                    if comparison not in scores:
-                        scores[comparison] = []
-                    scores[comparison].append(score_via_CV(comparison, flux_arr if method == 'NMF' else scaled_flux_arr, model, method))
-
-                if mles_and_covs:
-                    ll_scores.append(ll_score_via_CV(scaled_flux_arr, model, method))
+                comparisons = score_via_CV(args.comparison,
+                                    flux_arr if method == 'NMF' else scaled_flux_arr,
+                                    model, method, n_jobs=args.n_jobs, include_mle=mles_and_covs)
+                for key, val in comparisons.items():
+                    if key in scores:
+                        scores[key].append(val)
+                    else:
+                        scores[key] = [val]
 
             if mles_and_covs:
-                ax2.axhline(cov_mcd_score(scaled_flux_arr, args.scale), color='violet', label='MCD Cov', linestyle='--')
-                ax2.axhline(cov_lw_scoare(scaled_flux_arr, args.scale), color='orange', label='LW Cov', linestyle='--')
+                #ax2.axhline(cov_mcd_score(scaled_flux_arr, args.scale), color='violet', label='MCD Cov', linestyle='--')
+                ax2.axhline(cov_lw_score(scaled_flux_arr, args.scale), color='orange', label='LW Cov', linestyle='--')
 
-            print(n_components)
-            print(scores)
-            for keys, score in scores:
-                ax1.plot(n_components, score, label=method + ':' + keys + ' scores')
-
-            if len(ll_scores) > 0:
-                print(ll_scores)
-                ax2.plot(n_components, ll_scores, '-.', label=method + ' ll scores')
+            for key, score_list in scores.items():
+                if key != 'mle':
+                    ax1.plot(n_components, score_list, label=method + ':' + key + ' scores')
+                else:
+                    ax2.plot(n_components, score_list, '-.', label=method + ' mle scores')
 
         ax1.set_xlabel('nb of components')
         ax1.set_ylabel('CV scores', figure=fig)
@@ -201,12 +208,12 @@ def main():
 
         plt.show()
     else:
-        sources, components, model = dim_reduce(args.method, flux_arr if args.method == 'NMF' else scaled_flux_arr,
+        sources, components, model = dim_reduce(args.method[0], flux_arr if args.method[0] == 'NMF' else scaled_flux_arr,
                                         args.n_components, args.n_neighbors,
-                                        args.max_iter, random_state)
+                                        args.n_iter, random_state)
         serialize_data(sources, components, comb_exposure_arr, comb_wavelengths,
-                        args.path, args.method)
-        pickle_model((model, ss), args.path, args.method)
+                        args.path, args.method[0])
+        pickle_model((model, ss), args.path, args.method[0])
 
 def serialize_data(sources, components, exposures, wavelengths, path='.', method='ICA',
                     filename=None):
@@ -253,6 +260,8 @@ def get_model(method, n=None, n_neighbors=None, max_iter=None, random_state=None
         model = PCA()
     elif method == 'SPCA':
         model = SparsePCA()
+        if n_jobs is not None:
+            model.n_jobs = n_jobs
     elif method == 'NMF':
         model = NMF(solver='cd')
     elif method == 'ISO':
@@ -260,9 +269,12 @@ def get_model(method, n=None, n_neighbors=None, max_iter=None, random_state=None
     elif method == 'KPCA':
         model = KernelPCA(kernel='rbf', fit_inverse_transform=False, gamma=1, alpha=0.0001)
     elif method == 'FA':
-        model = FactorAnalysis()
+        #model = FactorAnalysis(svd_method='lapack') #(tol=0.0001, iterated_power=4)
+        model = FactorAnalysis(tol=0.0001, iterated_power=4)
     elif method == 'DL':
         model = DictionaryLearning(split_sign=True, fit_algorithm='cd', alpha=1)
+        if n_jobs is not None:
+            model.n_jobs = n_jobs
 
     if n is not None:
         model.n_components = n
@@ -272,8 +284,7 @@ def get_model(method, n=None, n_neighbors=None, max_iter=None, random_state=None
         model.random_state = random_state
     if n_neighbors is not None:
         model.n_neighbors = n_neighbors
-    if n_jobs is not None:
-        model.n_jobs = n_jobs
+
 
     return model
 
@@ -333,56 +344,108 @@ def load_all_in_dir(path, pattern, ivar_cutoff=0):
 
     return flux_arr, exp_arr, ivar_arr, mask_arr, wavelengths
 
-def ll_score_via_CV(flux_arr, model, method, folds=3):
-    kf = KFold(len(flux_arr), n_folds=folds)
-    scores = []
-    for train_index, test_index in kf:
-        flux_train, flux_test = flux_arr[train_index], flux_arr[test_index]
-        model.fit(flux_train)
-        scores.append(model.score(flux_test))
+def score_via_CV(score_methods, flux_arr, model, method, folds=3, n_jobs=1, include_mle=False):
+    def ___scorer(all_args):
+        return _scorer(*all_args)
 
-    return np.mean(scores)
+    def _scorer((train_inds, test_inds), flux_arr, model__and__model_flux_mean, method, score_methods, include_mle):
+        model = model__and__model_flux_mean[0]
+        model_flux_mean = model__and__model_flux_mean[1]
 
-def score_via_CV(score_method, flux_arr, model, method, folds=3):
-    kf = KFold(len(flux_arr), n_folds=folds)
-    scores = []
+        flux_test = flux_arr[test_inds]
+        flux_conv_test = transform_inverse_transform(flux_test, model, model_flux_mean, method)
 
-    for train_index, test_index in kf:
-        flux_train, flux_test = flux_arr[train_index], flux_arr[test_index]
+        scores = {}
+
+        for score_method in score_methods:
+            print("Calculating score:" + score_method)
+
+            if score_method == 'EXP_VAR':
+                score_func = explained_variance_score
+            elif score_method == 'R2':
+                score_func = r2_score
+            elif score_method == 'MSE':
+                score_func = mean_squared_error
+            elif score_method == 'MAE':
+                score_func = median_absolute_error #Except can't use because doesn't support multioutput
+
+            if score_method != 'MAE':
+                scores[score_method] = score_func(flux_test, flux_conv_test, multioutput='uniform_average')
+            else:
+                scores[score_method] = np.mean(np.median(np.abs(flux_test - flux_conv_test), axis=1))
+
+            print("Calculated score:" + score_method + ": " + str(scores[score_method]))
+
+        if include_mle and method in ['FA', 'PCA']:
+            scores['mle'] = model.score(flux_test)
+
+        print("Scores: " + str(scores))
+        return scores
+
+    def ___modeler(all_args):
+        return _modeler(*all_args)
+
+    def _modeler((train_inds, test_inds), flux_arr, model, method):
+        new_model = est_clone(model)
+        flux_train = flux_arr[train_inds]
+        flux_avg = np.mean(flux_arr[train_inds], axis=0)
+
+        print("Training new model: " + str(new_model))
 
         if method == 'KPCA':
-            model.fit_inverse_transform = False
-            model.fit(flux_train)
+            new_model.fit_inverse_transform = False
+            new_model.fit(flux_train)
 
             sqrt_lambdas = np.diag(np.sqrt(model.lambdas_))
             X_transformed = np.dot(model.alphas_, sqrt_lambdas)
             n_samples = X_transformed.shape[0]
-            K = model._get_kernel(X_transformed)
+            K = new_model._get_kernel(X_transformed)
             K.flat[::n_samples + 1] += model.alpha
 
-            model.dual_coef_ = linalg.solve(K, flux_train)
-            model.X_transformed_fit_ = X_transformed
-            model.fit_inverse_transform = True
-
-            flux_conv_test = transform_inverse_transform(flux_test, model, method)
+            new_model.dual_coef_ = linalg.solve(K, flux_train)
+            new_model.X_transformed_fit_ = X_transformed
+            new_model.fit_inverse_transform = True
         else:
-            model.fit(flux_train)
-            flux_conv_test = transform_inverse_transform(flux_test, model, method)
+            new_model.fit(flux_train)
 
-        if score_method == 'EXP_VAR':
-            score_func = explained_variance_score
-        elif score_method == 'R2':
-            score_func = r2_score
-        elif score_method == 'MSE':
-            score_func = mean_squared_error
-        elif score_method == 'MAE':
-            score_func = median_absolute_error
+        print("Returning new model: " + str(new_model))
+        return new_model, flux_avg
 
-        scores.append(score_func(flux_test, flux_conv_test, multioutput='uniform_average'))
+    kf = KFold(len(flux_arr), n_folds=folds, shuffle=True)
+    pool = ThreadPool(n_jobs)
 
-    return np.mean(scores)
+    models_n_avgs = pool.map(___modeler, it.izip(kf, it.repeat(flux_arr), it.repeat(model), it.repeat(method)))
+    all_scores = pool.map(___scorer, it.izip(kf, it.repeat(flux_arr), models_n_avgs, it.repeat(method), it.repeat(score_methods), it.repeat(include_mle)))
+    print("All_scores: " + str(all_scores))
 
-def transform_inverse_transform(flux_arr, model, method):
+    '''
+    for train_inds, test_inds in kf:
+        plot_model = models_n_avgs[0][0]
+        plt.plot(range(len(flux_arr[test_inds[0]])), flux_arr[test_inds[0]], 'r--')
+        inv_flux = transform_inverse_transform(flux_arr[test_inds[0]].reshape(1,-1), plot_model, models_n_avgs[0][1], method)
+        plt.plot(range(len(inv_flux[0])), inv_flux[0], 'b-.')
+        #plt.plot(range(len(inv_flux[0])), inv_flux[0] + np.mean(flux_arr[test_inds], axis=0), 'g.')
+        plt.show()
+        break
+    '''
+
+    collated_scores = {}
+    for scores in all_scores:
+        print("Got scores obj of: " + str(scores))
+        for key, val in scores.items():
+            if key in collated_scores:
+                collated_scores[key].append(val)
+            else:
+                collated_scores[key] = [val]
+
+    final_scores = {}
+    for key, vals in collated_scores.items():
+        final_scores[key] = np.mean(vals)
+
+    print("Final_scores: " + str(final_scores))
+    return final_scores
+
+def transform_inverse_transform(flux_arr, model, model_flux_mean, method):
     if method in ['PCA', 'KPCA', 'ICA']:
         att_invtrans = model.inverse_transform(model.transform(flux_arr))
     else:
@@ -394,6 +457,9 @@ def transform_inverse_transform(flux_arr, model, method):
             for comp_n in xrange(components.shape[0]):
                 rec_comp = trans_arr[flux_n, comp_n] * components[comp_n]
                 att_invtrans[flux_n] += rec_comp
+
+        if method in ['FA']:
+            att_invtrans += model_flux_mean
 
     return att_invtrans
 

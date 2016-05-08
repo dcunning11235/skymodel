@@ -38,11 +38,30 @@ from astropy.utils.compat import argparse
 
 RANDOM_STATE = 456371
 
-def load_observation_metadata(path='.', file='annotated_metadata.csv', flags={}):
+def load_observation_metadata(path='.', file='annotated_metadata.csv', flags=""):
     data = Table.read(os.path.join(path, file), format="ascii.csv")
 
-    if flags.get("proc_lunar_mag"):
+    if "proc_lunar_mag" in flags:
         data['LUNAR_MAGNITUDE'] = np.power(2.512, -data['LUNAR_MAGNITUDE'])
+
+    if "wrap_angles" in flags:
+        data['AZ'] = (data['AZ'] + 360.0) % 360.0
+        data['RA'] = (data['RA'] + 360.0) % 360.0
+        data['DEC'] = (data['DEC'] + 360.0) % 360.0
+        data['LUNAR_SEP'] = (data['LUNAR_SEP'] + 360.0) % 360.0
+        data['SOLAR_SEP'] = (data['LUNAR_SEP'] + 360.0) % 360.0
+        data['GALACTIC_CORE_SEP'] = (data['GALACTIC_CORE_SEP'] + 360.0) % 360.0
+        data['GALACTIC_PLANE_SEP'] = (data['GALACTIC_PLANE_SEP'] + 360.0) % 360.0
+        #data['ECLIPTIC_PLANE_SEP'] = (data['ECLIPTIC_PLANE_SEP'] + 360.0) % 360.0
+        #data['ECLIPTIC_PLANE_SOLAR_SEP'] = (data['ECLIPTIC_PLANE_SOLAR_SEP'] + 360.0) % 360.0
+
+    if "cos_sep_angles" in flags:
+        data['LUNAR_SEP'] = np.cos(data['LUNAR_SEP'] * np.pi/180.0)
+        data['SOLAR_SEP'] = np.cos(data['LUNAR_SEP'] * np.pi/180.0)
+        data['GALACTIC_CORE_SEP'] = np.cos(data['GALACTIC_CORE_SEP'] * np.pi/180.0)
+        data['GALACTIC_PLANE_SEP'] = np.cos(data['GALACTIC_PLANE_SEP'] * np.pi/180.0)
+        #data['ECLIPTIC_PLANE_SEP'] = np.cos(data['ECLIPTIC_PLANE_SEP'] * np.pi/180.0)
+        #data['ECLIPTIC_PLANE_SOLAR_SEP'] = np.cos(data['ECLIPTIC_PLANE_SOLAR_SEP'] * np.pi/180.0)
 
     return data
 
@@ -94,14 +113,6 @@ def main():
 
     parser_compare = subparsers.add_parser('compare')
     parser_compare.set_defaults(func=action_compare)
-    '''
-    parser_compare.add_argument(
-        '--test_inds', type=str, default=None, metavar='TEST_INDS',
-        help='Indicies of loaded spectra to use in testing model; \'ALL\' is ' \
-            'leave-one-out for the whole set, indvidual numbers or ranges do leave-one-out '\
-            'for those specified spectra.  OVERRIDES --test_folds; IGNORED by --hyper_fit'
-    )
-    '''
     parser_compare.add_argument(
         '--folds', type=int, default=None, metavar='TEST_FOLDS',
         help='Do k-fold cross validation with specified number of folds.  Defaults to 3.'
@@ -144,14 +155,14 @@ def main():
     )
 
     parser.add_argument(
-        '--metadata_flags', type=str, default=None, metavar='METADATA_FLAGS',
+        '--metadata_flags', type=str, default='', metavar='METADATA_FLAGS',
         help='Flags specifying observational metadata pre-processing, e.g. LUNAR_MAG which takes the '\
             'magnitude and linearizes it (ignoring that it is an area magnitude)'
     )
 
     args = parser.parse_args()
 
-    obs_metadata = trim_observation_metadata(load_observation_metadata(args.metadata_path))
+    obs_metadata = trim_observation_metadata(load_observation_metadata(args.metadata_path, flags=args.metadata_flags))
     sources, components, exposures, wavelengths = ICAize.deserialize_data(args.spectra_path, args.method)
     source_model = ICAize.unpickle_model(args.spectra_path, args.method)
 
@@ -179,7 +190,7 @@ def main():
         elif args.scorer == 'MAE':
             scorer = make_scorer(MAE, greater_is_better=False)
         elif args.scorer == 'MSE':
-            scorer = make_scorer(mean_squared_error, multioutput='uniform_average')
+            scorer = make_scorer(mean_squared_error, greater_is_better=False, multioutput='uniform_average')
 
         rcv = RandomizedSearchCV(predictive_model, param_distributions=pdist,
                             n_iter=args.iters, random_state=RANDOM_STATE,
@@ -191,7 +202,8 @@ def main():
         print(rcv.best_params_)
         if args.outputfbk:
             print("=+"*10 + "=")
-            print(rcv.grid_scores_)
+            for val in rcv.grid_scores_:
+                print(val)
             print("=+"*10 + "=")
 
         if args.save_best:

@@ -75,9 +75,8 @@ def trim_observation_metadata(data, copy=False):
                     'LUNAR_MAGNITUDE', 'LUNAR_ELV', 'LUNAR_SEP', 'SOLAR_ELV',
                     'SOLAR_SEP', 'GALACTIC_CORE_SEP',
                     'GALACTIC_PLANE_SEP',
-                    'SS_COUNT', 'SS_AREA',
-                    'ECLIPTIC_PLANE_SEP',
-                    'ECLIPTIC_PLANE_SOLAR_SEP']
+                    'SS_COUNT', 'SS_AREA']
+                    #,'ECLIPTIC_PLANE_SEP', 'ECLIPTIC_PLANE_SOLAR_SEP']
     removed_columns = [name for name in data.colnames if name not in kept_columns]
     data.remove_columns(removed_columns)
 

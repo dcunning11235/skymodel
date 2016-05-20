@@ -192,7 +192,14 @@ def main():
         elif args.scorer == 'MSE':
             scorer = make_scorer(mean_squared_error, greater_is_better=False, multioutput='uniform_average')
 
-        rcv = RandomizedSearchCV(predictive_model, param_distributions=pdist,
+        if args.model == 'GP':
+            rcv = GridSearchCV(predictive_model, param_grid=pdist,
+                            error_score=0, cv=args.folds, n_jobs=args.n_jobs,
+                            scoring=scorer)
+                            #random_state=RANDOM_STATE,
+                            #n_iter=args.iters,
+        else:
+            rcv = RandomizedSearchCV(predictive_model, param_distributions=pdist,
                             n_iter=args.iters, random_state=RANDOM_STATE,
                             error_score=0, cv=args.folds, n_jobs=args.n_jobs,
                             scoring=scorer)

@@ -22,7 +22,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from sklearn.grid_search import RandomizedSearchCV
+from sklearn.grid_search import RandomizedSearchCV, GridSearchCV
 from scipy.stats import randint as sp_randint
 from scipy.stats import uniform as sp_uniform
 
@@ -240,11 +240,11 @@ def get_param_distribution_for_model(model_str, iter_count):
         pdist = []
         for i in range(iter_count):
             trial_dict = {}
-            trial_dict['corr'] = random.choice(corr_methods)
-            trial_dict['theta0'] = theta0_range.rvs()
-            trial_dict['thetaL'] = thetaL_range.rvs()
-            trial_dict['thetaU'] = thetaU_range.rvs()
-            trial_dict['random_start'] = random_start_range.rvs()
+            trial_dict['corr'] = [random.choice(corr_methods)]
+            trial_dict['theta0'] = [theta0_range.rvs()]
+            trial_dict['thetaL'] = [thetaL_range.rvs()]
+            trial_dict['thetaU'] = [thetaU_range.rvs()]
+            trial_dict['random_start'] = [random_start_range.rvs()]
             pdist.append(trial_dict)
     elif model_str == 'KNN':
         pdist['weights'] = ['uniform', 'distance']

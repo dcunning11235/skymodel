@@ -34,10 +34,31 @@ import os.path
 import sys
 import pickle as pk
 import random
+from functools import partial
+from pytz import timezone
 
 from astropy.utils.compat import argparse
 
+import annotate_obs_metadata as aom
+
 RANDOM_STATE = 456371
+
+def load_metadata_for_dt_altaz(dt):
+    block_dt = dt + aom.get_block_delta(dt)
+    apo_tz = timezone('America/Denver')
+    block_dt = apo_tz.localize(block_dt).astimezone(pytz.utc)
+
+    block_dt_str = block_dt.strftime("%Y-%b-%d %H:%M")
+
+    lunar_md_table = Table.read(args.lunar_metadata, format="ascii.csv")
+    lunar_row = lunar_data[lunar_data['UTC'] == block_dt_str]
+
+    solar_md_table = Table.read(args.solar_metadata, format="ascii.csv")
+    solar_row = solar_data[solar_data['UTC'] == block_dt_str]
+
+    sunspot_md_table = Table.read(args.sunspot_metadata, format="ascii.csv")
+    ss_count, ss_area = aom.find_sunspot_data(block_dt_str, sunspot_md_table)
+
 
 def load_observation_metadata(path='.', file='annotated_metadata.csv', flags=""):
     data = Table.read(os.path.join(path, file), format="ascii.csv")
@@ -83,19 +104,12 @@ def trim_observation_metadata(data, copy=False):
 
     return data
 
-def action_build(args):
-    pass
-
-def action_compare(args):
-    pass
-
 def main():
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         description='Build and test models based on dim reductions and provided spectra'
     )
     subparsers = parser.add_subparsers(dest='subparser_name')
-
 
     parser.add_argument(
         '--metadata_path', type=str, default='.', metavar='PATH',
@@ -109,10 +123,29 @@ def main():
         '--method', type=str, default='ICA', metavar='METHOD',
         help='Dim reduction method to load data for'
     )
-
+    parser.add_argument(
+        '--n_jobs', type=int, default=1, metavar='N_JOBS',
+        help='N_JOBS'
+    )
+    parser.add_argument(
+        '--model', type=str, choices=['ET', 'RF', 'GP', 'KNN', 'SVR'], default='ET',
+        help='Which model type to use: ET (Extra Trees), RF (Random Forest), GP (Gaussian Process), KNN, or SVR (Support Vector Regression)'
+    )
+    parser.add_argument(
+        '--load_model', action='store_true',
+        help='Whether or not to load the model from --model_path'
+    )
+    parser.add_argument(
+        '--model_path', type=str, default='model.pkl', metavar='MODEL_PATH',
+        help='COMPLETE path from which to load a model'
+    )
+    parser.add_argument(
+        '--metadata_flags', type=str, default='', metavar='METADATA_FLAGS',
+        help='Flags specifying observational metadata pre-processing, e.g. LUNAR_MAG which takes the '\
+            'magnitude and linearizes it (ignoring that it is an area magnitude)'
+    )
 
     parser_compare = subparsers.add_parser('compare')
-    parser_compare.set_defaults(func=action_compare)
     parser_compare.add_argument(
         '--folds', type=int, default=None, metavar='TEST_FOLDS',
         help='Do k-fold cross validation with specified number of folds.  Defaults to 3.'
@@ -130,41 +163,44 @@ def main():
         help='Whether or not to save the (last/best) model built for e.g. --hyper_fit'
     )
     parser_compare.add_argument(
-        '--scorer', type=str, choices=['R2', 'MAE', 'MSE'], default='R2',
+        '--scorer', type=str, choices=['R2', 'MAE', 'MSE', 'LL'], default='R2',
         help='Which scoring method to use to determine ranking of model instances.'
     )
 
-
-    parser.add_argument(
-        '--n_jobs', type=int, default=1, metavar='N_JOBS',
-        help='N_JOBS'
-    )
-
-
-    parser.add_argument(
-        '--model', type=str, choices=['ET', 'RF', 'GP', 'KNN', 'SVR'], default='ET',
-        help='Which model type to use: ET (Extra Trees), RF (Random Forest), GP (Gaussian Process), KNN, or SVR (Support Vector Regression)'
+    parser_compare.add_argument(
+        '--use_spectra', action='store_true',
+        help='Whether scoring is done against the DM components or the predicted spectra'
     )
     parser.add_argument(
-        '--load_model', action='store_true',
-        help='Whether or not to load the model from --model_path'
+        '--compacted_path', type=str, default=None, metavar='COMPATED_PATH',
+        help='Path to find compacted/arrayized data; setting this will cause --path, --pattern to be ignored'
     )
-    parser.add_argument(
-        '--model_path', type=str, default='model.pkl', metavar='MODEL_PATH',
-        help='COMPLETE path from which to load a model'
-    )
-
-    parser.add_argument(
-        '--metadata_flags', type=str, default='', metavar='METADATA_FLAGS',
-        help='Flags specifying observational metadata pre-processing, e.g. LUNAR_MAG which takes the '\
-            'magnitude and linearizes it (ignoring that it is an area magnitude)'
+    parser_compare.add_argument(
+        '--ivar_cutoff', type=float, default=0.001, metavar='IVAR_CUTOFF',
+        help='data with inverse variace below cutoff is masked as if ivar==0'
     )
 
     args = parser.parse_args()
 
     obs_metadata = trim_observation_metadata(load_observation_metadata(args.metadata_path, flags=args.metadata_flags))
     sources, components, exposures, wavelengths = ICAize.deserialize_data(args.spectra_path, args.method)
-    source_model = ICAize.unpickle_model(args.spectra_path, args.method)
+    source_model, ss = ICAize.unpickle_model(args.spectra_path, args.method)
+
+    comb_flux_arr, comb_exposure_arr = None, None
+    if args.use_spectra:
+        comb_flux_arr, comb_exposure_arr, comb_ivar_arr, comb_masks, comb_wavelengths = ICAize.load_data(args)
+
+        filter_arr = np.in1d(comb_exposure_arr, exposures)
+        comb_flux_arr = comb_flux_arr[filter_arr]
+        comb_exposure_arr = comb_exposure_arr[filter_arr]
+
+        sorted_inds = np.argsort(comb_exposure_arr)
+        comb_flux_arr = comb_flux_arr[sorted_inds]
+        comb_exposure_arr = comb_exposure_arr[sorted_inds]
+
+        del comb_ivar_arr
+        del comb_masks
+        del comb_wavelengths
 
     reduced_obs_metadata = obs_metadata[np.in1d(obs_metadata['EXP_ID'], exposures)]
     reduced_obs_metadata.sort('EXP_ID')
@@ -186,11 +222,13 @@ def main():
 
         scorer = None
         if args.scorer == 'R2':
-            scorer = make_scorer(r2_score, multioutput='uniform_average')
+            scorer = make_scorer(R2)
         elif args.scorer == 'MAE':
             scorer = make_scorer(MAE, greater_is_better=False)
         elif args.scorer == 'MSE':
-            scorer = make_scorer(mean_squared_error, greater_is_better=False, multioutput='uniform_average')
+            scorer = make_scorer(MSE, greater_is_better=False)
+        elif args.scorer == 'LL':
+            scorer = None
 
         if args.model == 'GP':
             rcv = GridSearchCV(predictive_model, param_grid=pdist,
@@ -200,9 +238,13 @@ def main():
                             #n_iter=args.iters,
         else:
             rcv = RandomizedSearchCV(predictive_model, param_distributions=pdist,
-                            n_iter=args.iters, random_state=RANDOM_STATE,
-                            error_score=0, cv=args.folds, n_jobs=args.n_jobs,
+                            n_iter=args.iters, cv=args.folds, n_jobs=args.n_jobs,
                             scoring=scorer)
+
+        # This is going to fit X (metdata) to Y (DM'ed sources).  But there are
+        # really two tests here:  how well hyperparams fit/predict the sources
+        # and how well they fit/predict the actual source spectra.  Until I know
+        # better, I 'm going to need to build a way to test both.
         rcv.fit(X_arr, Y_arr)
 
         print(rcv.best_score_)
@@ -216,8 +258,29 @@ def main():
         if args.save_best:
             save_model(rcv.best_estimator_, args.model_path)
 
-def MAE(Y, y):
-    return np.mean(np.median(np.abs(Y - y), axis=1))
+def MAE(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_model=None, ss=None):
+    if Y_full is not None and flux_arr is not None and source_model is not None and ss is not None:
+        # Figure out the right way to do this... don't want to rewrite 4/5 of the
+        # GridSearch/cross_validation code.  And I don't know a *good* way do this
+        # array comparison 'right'
+        inds = []
+        for i in range(Y.shape[0]):
+            ind = np.flatnonzero(np.all(Y_full == Y[i, :], axis=0))
+            if len(ind) > 0:
+                inds = np.concatenate(inds, ind)
+        print(inds)
+
+        back_trans_flux = ICAize.inverse_transform(y, source_model, ss, method)
+        return np.mean(np.median(np.abs(flux_arr[inds] - back_trans_flux), axis=1))
+    else:
+        return np.mean(np.median(np.abs(Y - y), axis=1))
+
+def MSE(Y, y, multioutput='uniform_average'):
+    #return np.mean(np.mean(np.power(Y - y, 2), axis=1))
+    return mean_squared_error(Y, y, multioutput=multioutput)
+
+def R2(Y, y, multioutput='uniform_average'):
+    return r2_score(Y, y, multioutput=multioutput)
 
 def get_param_distribution_for_model(model_str, iter_count):
     pdist = {}

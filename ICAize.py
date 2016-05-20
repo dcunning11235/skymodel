@@ -72,7 +72,7 @@ def main():
     )
     parser.add_argument(
         '--scale', action='store_true',
-        help='Should inputs be scaled?  Will mean subtract and value scale, but does not scale variace.'
+        help='Should inputs variance be scaled?  Defaults to mean subtract and value scale, but w/out this does not scale variance.'
     )
     parser.add_argument(
         '--ivar_cutoff', type=float, default=0.001, metavar='IVAR_CUTOFF',
@@ -131,13 +131,11 @@ def main():
         flux_arr = comb_flux_arr.astype(dtype=np.float64)
     else:
         flux_arr = comb_flux_arr
-    scaled_flux_arr = None
-    ss = None
+
+    ss = skpp.StandardScaler(with_std=False)
     if args.scale:
-        ss = skpp.StandardScaler(with_std=False)
-        scaled_flux_arr = ss.fit_transform(flux_arr)
-    else:
-        scaled_flux_arr = flux_arr
+        ss = skpp.StandardScaler(with_std=True)
+    scaled_flux_arr = ss.fit_transform(flux_arr)
 
     if args.subparser_name == 'compare':
         fig, ax1 = plt.subplots()
@@ -156,7 +154,7 @@ def main():
 
                 comparisons = score_via_CV(args.comparison,
                                     flux_arr if method == 'NMF' else scaled_flux_arr,
-                                    model, method, n_jobs=args.n_jobs, include_mle=mles_and_covs)
+                                    model, scaler, method, n_jobs=args.n_jobs, include_mle=mles_and_covs)
                 for key, val in comparisons.items():
                     if key in scores:
                         scores[key].append(val)
@@ -187,7 +185,7 @@ def main():
                                             args.n_iter, random_state)
             serialize_data(sources, components, comb_exposure_arr, comb_wavelengths,
                             args.path, method)
-            pickle_model((model, ss), args.path, method)
+            pickle_model((model, None if method == 'NMF' else ss), args.path, method)
 
 def load_data(args):
     if args.compacted_path is not None:
@@ -356,14 +354,11 @@ def get_score_func(score_method):
 
     return score_func
 
-def _scorer(train_inds, test_inds, flux_arr, model__and__model_flux_mean, method, score_methods, include_mle):
-    model = model__and__model_flux_mean[0]
-    model_flux_mean = model__and__model_flux_mean[1]
-
+def _scorer(train_inds, test_inds, flux_arr, model, scaler, method, score_methods, include_mle):
     flux_test = flux_arr[test_inds]
     flux_conv_test = None
     if score_methods != ['LL']:
-        flux_conv_test = ransform_inverse_transform(flux_test, model, model_flux_mean, method)
+        flux_conv_test = transform_inverse_transform(flux_test, model, scaler, method)
 
     scores = {}
 
@@ -397,8 +392,6 @@ def ___modeler(all_args):
 def _modeler(train_inds, test_inds, flux_arr, model, method):
     new_model = est_clone(model)
     flux_train = flux_arr[train_inds]
-    flux_avg = np.mean(flux_arr[train_inds], axis=0)
-
     #print("Training new model: " + str(new_model))
 
     if method == 'KPCA':
@@ -422,30 +415,15 @@ def _modeler(train_inds, test_inds, flux_arr, model, method):
         new_model.fit(flux_train)
 
     #print("Returning new model: " + str(new_model))
-    return new_model, flux_avg
+    return new_model
 
-def score_via_CV(score_methods, flux_arr, model, method, folds=3, n_jobs=1, include_mle=False,
+def score_via_CV(score_methods, flux_arr, model, scaler, method, folds=3, n_jobs=1, include_mle=False,
                 modeler=_modeler, scorer=_scorer):
     kf = KFold(len(flux_arr), n_folds=folds, shuffle=True)
-
-    '''
-    if n_jobs > 1:
-        #This is getting me into trouble... memory leaks.  Need to learn more about how
-        #Python handles threading, ThreadPool, etc.
-        pool = ThreadPool(n_jobs)
-        if hasattr(model, 'n_jobs'):
-            model.n_jobs = 1
-
-        models_n_avgs = pool.map(___modeler, it.izip(kf, it.repeat(flux_arr), it.repeat(model), it.repeat(method)))
-        all_scores = pool.map(___scorer, it.izip(kf, it.repeat(flux_arr), models_n_avgs, it.repeat(method), it.repeat(score_methods), it.repeat(include_mle)))
-        pool.close()
-        #print("All_scores: " + str(all_scores))
-    else:
-    '''
     all_scores = []
     for train_inds, test_inds in kf:
-        model_n_avg = modeler(train_inds, test_inds, flux_arr, model, method)
-        all_scores.append(scorer(train_inds, test_inds, flux_arr, model_n_avg, method, score_methods, include_mle))
+        model = modeler(train_inds, test_inds, flux_arr, model, method)
+        all_scores.append(scorer(train_inds, test_inds, flux_arr, model, scaler, method, score_methods, include_mle))
 
     collated_scores = {}
     for scores in all_scores:
@@ -463,21 +441,27 @@ def score_via_CV(score_methods, flux_arr, model, method, folds=3, n_jobs=1, incl
     #print("Final_scores: " + str(final_scores))
     return final_scores
 
-def transform_inverse_transform(flux_arr, model, model_flux_mean, method):
+def transform_inverse_transform(flux_arr, model, ss, method):
+    trans_arr = model.transform(flux_arr)
+    return inverse_transform(trans_arr, model, ss, method)
+
+def inverse_transform(dm_flux_arr, model, ss, method):
     if method in ['PCA', 'KPCA', 'ICA']:
-        att_invtrans = model.inverse_transform(model.transform(flux_arr))
+        att_invtrans = model.inverse_transform(dm_flux_arr)
     else:
         components = get_components(method, model)
-        trans_arr = model.transform(flux_arr)
 
-        att_invtrans = np.zeros(shape=(trans_arr.shape[0], components.shape[1]), dtype=float)
-        for flux_n in xrange(trans_arr.shape[0]):
+        att_invtrans = np.zeros(shape=(dm_flux_arr.shape[0], components.shape[1]), dtype=float)
+        for flux_n in xrange(dm_flux_arr.shape[0]):
             for comp_n in xrange(components.shape[0]):
-                rec_comp = trans_arr[flux_n, comp_n] * components[comp_n]
+                rec_comp = dm_flux_arr[flux_n, comp_n] * components[comp_n]
                 att_invtrans[flux_n] += rec_comp
 
-        if method in ['FA']:
-            att_invtrans += model_flux_mean
+        #if method in ['FA']:
+        #    att_invtrans += model_flux_mean
+
+    if ss is not None and method != 'NMF':
+        att_invtrans = ss.inverse_transform(att_invtrans)
 
     return att_invtrans
 

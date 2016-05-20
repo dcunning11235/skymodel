@@ -92,6 +92,9 @@ def tai_str_to_datetime(tai):
 def get_tai_block_delta(tai, direction="closest"):
     tai = tai_str_to_datetime(tai)
 
+    return get_block_delta(tai, direction)
+
+def get_block_delta(dt, direction="closest"):
     delta_mins = - ((tai.minute % ephemeris_block_size_minutes) + (tai.second / 60.0))
     if direction == 'closest':
         if delta_mins <= -ephemeris_block_size_minutes/2:

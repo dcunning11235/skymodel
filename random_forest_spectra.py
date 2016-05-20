@@ -33,6 +33,7 @@ import os
 import os.path
 import sys
 import pickle as pk
+import random
 
 from astropy.utils.compat import argparse
 
@@ -181,7 +182,7 @@ def main():
         predictive_model = get_model(args.model)
 
     if args.subparser_name == 'compare':
-        pdist = get_param_distribution_for_model(args.model)
+        pdist = get_param_distribution_for_model(args.model, args.iters)
 
         scorer = None
         if args.scorer == 'R2':
@@ -207,13 +208,11 @@ def main():
 
         if args.save_best:
             save_model(rcv.best_estimator_, args.model_path)
-    elif args.test_folds is not None:
-        pass
 
 def MAE(Y, y):
     return np.mean(np.median(np.abs(Y - y), axis=1))
 
-def get_param_distribution_for_model(model_str):
+def get_param_distribution_for_model(model_str, iter_count):
     pdist = {}
 
     if model_str in ['ET', 'RF']:
@@ -223,10 +222,23 @@ def get_param_distribution_for_model(model_str):
         pdist['min_samples_leaf'] = sp_randint(1, 15)
         pdist['bootstrap'] = [True, False]
     elif model_str == 'GP':
-        pdist['corr'] = ['absolute_exponential', 'squared_exponential', 'generalized_exponential', 'cubic', 'linear']
-        pdist['thetaL'] = sp_uniform(1e-5, 3e-1)
-        pdist['thetaU'] = sp_uniform(7e-1, 1)
-        pdist['random_start'] = sp_randint(1, 3)
+        #Fails because Gp will accpet either single values or array-like values, and it seems
+        #RandomizedSearchCV etc. get confused (as they must, given no other information)
+        corr_methods = ['absolute_exponential', 'squared_exponential', 'generalized_exponential', 'cubic', 'linear']
+        theta0_range = sp_uniform(1e-3, 8e-1)
+        thetaL_range = sp_uniform(1e-5, 3e-1)
+        thetaU_range = sp_uniform(7e-1, 1)
+        random_start_range = sp_randint(1, 3)
+
+        pdist = []
+        for i in range(iter_count):
+            trial_dict = {}
+            trial_dict['corr'] = random.choice(corr_methods)
+            trial_dict['theta0'] = theta0_range.rvs()
+            trial_dict['thetaL'] = thetaL_range.rvs()
+            trial_dict['thetaU'] = thetaU_range.rvs()
+            trial_dict['random_start'] = random_start_range.rvs()
+            pdist.append(trial_dict)
     elif model_str == 'KNN':
         pdist['weights'] = ['uniform', 'distance']
         pdist['metric'] = ['euclidean', 'manhattan', 'chebyshev']

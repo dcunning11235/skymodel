@@ -46,12 +46,6 @@ random_state=1234975
 data_file = "{}_sources_and_mixing.npz"
 pickle_file = "{}_pickle.pkl"
 
-def action_build(args):
-    pass
-
-def action_compare(args):
-    print(args)
-
 def main():
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -71,10 +65,29 @@ def main():
         '--compacted_path', type=str, default=None, metavar='COMPATED_PATH',
         help='Path to find compacted/arrayized data; setting this will cause --path, --pattern to be ignored'
     )
-
+    parser.add_argument(
+        '--method', type=str, default=['ICA'], metavar='METHOD',
+        choices=['ICA', 'PCA', 'SPCA', 'NMF', 'ISO', 'KPCA', 'FA', 'DL'], nargs='+',
+        help='Which dim. reduction method to use'
+    )
+    parser.add_argument(
+        '--scale', action='store_true',
+        help='Should inputs be scaled?  Will mean subtract and value scale, but does not scale variace.'
+    )
+    parser.add_argument(
+        '--ivar_cutoff', type=float, default=0.001, metavar='IVAR_CUTOFF',
+        help='data with inverse variace below cutoff is masked as if ivar==0'
+    )
+    parser.add_argument(
+        '--n_iter', type=int, default=1200, metavar='MAX_ITER',
+        help='Maximum number of iterations to allow for convergence.  For SDSS data 1000 is a safe number of ICA, while SPCA requires larger values e.g. ~2000 to ~2500'
+    )
+    parser.add_argument(
+        '--n_jobs', type=int, default=None, metavar='N_JOBS',
+        help='N_JOBS'
+    )
 
     parser_compare = subparsers.add_parser('compare')
-    parser_compare.set_defaults(func=action_compare)
     parser_compare.add_argument(
         '--max_components', type=int, default=50, metavar='COMP_MAX',
         help='Max number of components to use/test'
@@ -100,7 +113,6 @@ def main():
         help='Pick a random spectrum, plot its actual and reconstructed versions'
     )
 
-
     parser_build = subparsers.add_parser('build')
     parser_build.add_argument(
         '--n_components', type=int, default=40, metavar='N_COMPONENTS',
@@ -111,48 +123,9 @@ def main():
         help='Number of neighbots for e.g. IsoMap'
     )
 
-
-    parser.add_argument(
-        '--method', type=str, default=['ICA'], metavar='METHOD',
-        choices=['ICA', 'PCA', 'SPCA', 'NMF', 'ISO', 'KPCA', 'FA', 'DL'], nargs='+',
-        help='Which dim. reduction method to use'
-    )
-
-
-    parser.add_argument(
-        '--scale', action='store_true',
-        help='Should inputs be scaled?  Will mean subtract and value scale, but does not scale variace.'
-    )
-    parser.add_argument(
-        '--ivar_cutoff', type=float, default=0.001, metavar='IVAR_CUTOFF',
-        help='data with inverse variace below cutoff is masked as if ivar==0'
-    )
-    parser.add_argument(
-        '--n_iter', type=int, default=1200, metavar='MAX_ITER',
-        help='Maximum number of iterations to allow for convergence.  For SDSS data 1000 is a safe number of ICA, while SPCA requires larger values e.g. ~2000 to ~2500'
-    )
-    parser.add_argument(
-        '--n_jobs', type=int, default=None, metavar='N_JOBS',
-        help='N_JOBS'
-    )
-
     args = parser.parse_args()
 
-    print(args.compacted_path)
-    if args.compacted_path is not None:
-        comb_flux_arr, comb_exposure_arr, comb_ivar_arr, comb_wavelengths = arrayize.load_compacted_data(args.compacted_path)
-        comb_masks = comb_ivar_arr <= args.ivar_cutoff
-    else:
-        comb_flux_arr, comb_exposure_arr, comb_ivar_arr, comb_masks, comb_wavelengths = \
-                load_all_in_dir(args.path, pattern=args.pattern, ivar_cutoff=args.ivar_cutoff)
-
-    mask_summed = np.sum(comb_masks, axis=0)
-    min_val_ind = np.min(np.where(mask_summed == 0))
-    max_val_ind = np.max(np.where(mask_summed == 0))
-    print "For data set, minimum and maximum valid indecies are:", (min_val_ind, max_val_ind)
-    for i in range(comb_flux_arr.shape[0]):
-        comb_flux_arr[i,:min_val_ind] = 0
-        comb_flux_arr[i,max_val_ind+1:] = 0
+    comb_flux_arr, comb_exposure_arr, comb_ivar_arr, comb_masks, comb_wavelengths = load_data(args)
 
     if 'DL' in args.method:
         flux_arr = comb_flux_arr.astype(dtype=np.float64)
@@ -208,12 +181,31 @@ def main():
 
         plt.show()
     else:
-        sources, components, model = dim_reduce(args.method[0], flux_arr if args.method[0] == 'NMF' else scaled_flux_arr,
-                                        args.n_components, args.n_neighbors,
-                                        args.n_iter, random_state)
-        serialize_data(sources, components, comb_exposure_arr, comb_wavelengths,
-                        args.path, args.method[0])
-        pickle_model((model, ss), args.path, args.method[0])
+        for method in args.method:
+            sources, components, model = dim_reduce(method, flux_arr if method == 'NMF' else scaled_flux_arr,
+                                            args.n_components, args.n_neighbors,
+                                            args.n_iter, random_state)
+            serialize_data(sources, components, comb_exposure_arr, comb_wavelengths,
+                            args.path, method)
+            pickle_model((model, ss), args.path, method)
+
+def load_data(args):
+    if args.compacted_path is not None:
+        comb_flux_arr, comb_exposure_arr, comb_ivar_arr, comb_wavelengths = arrayize.load_compacted_data(args.compacted_path)
+        comb_masks = comb_ivar_arr <= args.ivar_cutoff
+    else:
+        comb_flux_arr, comb_exposure_arr, comb_ivar_arr, comb_masks, comb_wavelengths = \
+                load_all_in_dir(args.path, pattern=args.pattern, ivar_cutoff=args.ivar_cutoff)
+
+    mask_summed = np.sum(comb_masks, axis=0)
+    min_val_ind = np.min(np.where(mask_summed == 0))
+    max_val_ind = np.max(np.where(mask_summed == 0))
+    print "For data set, minimum and maximum valid indecies are:", (min_val_ind, max_val_ind)
+    for i in range(comb_flux_arr.shape[0]):
+        comb_flux_arr[i,:min_val_ind] = 0
+        comb_flux_arr[i,max_val_ind+1:] = 0
+
+    return comb_flux_arr, comb_exposure_arr, comb_ivar_arr, comb_masks, comb_wavelengths
 
 def serialize_data(sources, components, exposures, wavelengths, path='.', method='ICA',
                     filename=None):
@@ -344,94 +336,120 @@ def load_all_in_dir(path, pattern, ivar_cutoff=0):
 
     return flux_arr, exp_arr, ivar_arr, mask_arr, wavelengths
 
-def score_via_CV(score_methods, flux_arr, model, method, folds=3, n_jobs=1, include_mle=False):
-    def ___scorer(all_args):
-        return _scorer(*all_args)
+'''
+def ___scorer(all_args):
+    return _scorer(*all_args)
+'''
 
-    def _scorer((train_inds, test_inds), flux_arr, model__and__model_flux_mean, method, score_methods, include_mle):
-        model = model__and__model_flux_mean[0]
-        model_flux_mean = model__and__model_flux_mean[1]
+def get_score_func(score_method):
+    score_func = None
+    if score_method == 'EXP_VAR':
+        score_func = explained_variance_score
+    elif score_method == 'R2':
+        score_func = r2_score
+    elif score_method == 'MSE':
+        score_func = mean_squared_error
+    elif score_method == 'MAE':
+        score_func = median_absolute_error #Except can't use because doesn't support multioutput
+    elif score_method == 'LL':
+        score_func = None
 
-        flux_test = flux_arr[test_inds]
-        flux_conv_test = transform_inverse_transform(flux_test, model, model_flux_mean, method)
+    return score_func
 
-        scores = {}
+def _scorer(train_inds, test_inds, flux_arr, model__and__model_flux_mean, method, score_methods, include_mle):
+    model = model__and__model_flux_mean[0]
+    model_flux_mean = model__and__model_flux_mean[1]
 
-        for score_method in score_methods:
-            print("Calculating score:" + score_method)
+    flux_test = flux_arr[test_inds]
+    flux_conv_test = None
+    if score_methods != ['LL']:
+        flux_conv_test = ransform_inverse_transform(flux_test, model, model_flux_mean, method)
 
-            if score_method == 'EXP_VAR':
-                score_func = explained_variance_score
-            elif score_method == 'R2':
-                score_func = r2_score
-            elif score_method == 'MSE':
-                score_func = mean_squared_error
-            elif score_method == 'MAE':
-                score_func = median_absolute_error #Except can't use because doesn't support multioutput
+    scores = {}
 
+    for score_method in score_methods:
+        #print("Calculating score:" + score_method)
+
+        score_func = get_score_func(score_method)
+
+        if score_func is not None:
             if score_method != 'MAE':
                 scores[score_method] = score_func(flux_test, flux_conv_test, multioutput='uniform_average')
             else:
                 scores[score_method] = np.mean(np.median(np.abs(flux_test - flux_conv_test), axis=1))
 
-            print("Calculated score:" + score_method + ": " + str(scores[score_method]))
-
-        if include_mle and method in ['FA', 'PCA']:
+    if (include_mle or score_method == 'LL') and method in ['FA', 'PCA']:
+        try:
             scores['mle'] = model.score(flux_test)
+        except np.linalg.linalg.LinAlgError:
+            scores['mle'] = -2**10 #float("-inf")
+        except ValueError:
+            scores['mle'] = -2**10 #float("-inf")
 
-        print("Scores: " + str(scores))
-        return scores
+    #print("Scores: " + str(scores))
+    return scores
 
-    def ___modeler(all_args):
-        return _modeler(*all_args)
+'''
+def ___modeler(all_args):
+    return _modeler(*all_args)
+'''
 
-    def _modeler((train_inds, test_inds), flux_arr, model, method):
-        new_model = est_clone(model)
-        flux_train = flux_arr[train_inds]
-        flux_avg = np.mean(flux_arr[train_inds], axis=0)
+def _modeler(train_inds, test_inds, flux_arr, model, method):
+    new_model = est_clone(model)
+    flux_train = flux_arr[train_inds]
+    flux_avg = np.mean(flux_arr[train_inds], axis=0)
 
-        print("Training new model: " + str(new_model))
+    #print("Training new model: " + str(new_model))
 
-        if method == 'KPCA':
-            new_model.fit_inverse_transform = False
-            new_model.fit(flux_train)
+    if method == 'KPCA':
+        new_model.fit_inverse_transform = False
+        new_model.fit(flux_train)
 
-            sqrt_lambdas = np.diag(np.sqrt(model.lambdas_))
-            X_transformed = np.dot(model.alphas_, sqrt_lambdas)
-            n_samples = X_transformed.shape[0]
-            K = new_model._get_kernel(X_transformed)
-            K.flat[::n_samples + 1] += model.alpha
+        sqrt_lambdas = np.diag(np.sqrt(model.lambdas_))
+        X_transformed = np.dot(model.alphas_, sqrt_lambdas)
+        n_samples = X_transformed.shape[0]
+        K = new_model._get_kernel(X_transformed)
+        K.flat[::n_samples + 1] += model.alpha
 
-            new_model.dual_coef_ = linalg.solve(K, flux_train)
-            new_model.X_transformed_fit_ = X_transformed
-            new_model.fit_inverse_transform = True
-        else:
-            new_model.fit(flux_train)
+        new_model.dual_coef_ = linalg.solve(K, flux_train)
+        new_model.X_transformed_fit_ = X_transformed
+        new_model.fit_inverse_transform = True
+    else:
+        if np.any(np.isinf(flux_train)):
+            print("The given flux_train array contains inf's!")
+        if np.any(np.isnan(flux_train)):
+            print("The given flux_train array contains nan's!")
+        new_model.fit(flux_train)
 
-        print("Returning new model: " + str(new_model))
-        return new_model, flux_avg
+    #print("Returning new model: " + str(new_model))
+    return new_model, flux_avg
 
+def score_via_CV(score_methods, flux_arr, model, method, folds=3, n_jobs=1, include_mle=False,
+                modeler=_modeler, scorer=_scorer):
     kf = KFold(len(flux_arr), n_folds=folds, shuffle=True)
-    pool = ThreadPool(n_jobs)
-
-    models_n_avgs = pool.map(___modeler, it.izip(kf, it.repeat(flux_arr), it.repeat(model), it.repeat(method)))
-    all_scores = pool.map(___scorer, it.izip(kf, it.repeat(flux_arr), models_n_avgs, it.repeat(method), it.repeat(score_methods), it.repeat(include_mle)))
-    print("All_scores: " + str(all_scores))
 
     '''
+    if n_jobs > 1:
+        #This is getting me into trouble... memory leaks.  Need to learn more about how
+        #Python handles threading, ThreadPool, etc.
+        pool = ThreadPool(n_jobs)
+        if hasattr(model, 'n_jobs'):
+            model.n_jobs = 1
+
+        models_n_avgs = pool.map(___modeler, it.izip(kf, it.repeat(flux_arr), it.repeat(model), it.repeat(method)))
+        all_scores = pool.map(___scorer, it.izip(kf, it.repeat(flux_arr), models_n_avgs, it.repeat(method), it.repeat(score_methods), it.repeat(include_mle)))
+        pool.close()
+        #print("All_scores: " + str(all_scores))
+    else:
+    '''
+    all_scores = []
     for train_inds, test_inds in kf:
-        plot_model = models_n_avgs[0][0]
-        plt.plot(range(len(flux_arr[test_inds[0]])), flux_arr[test_inds[0]], 'r--')
-        inv_flux = transform_inverse_transform(flux_arr[test_inds[0]].reshape(1,-1), plot_model, models_n_avgs[0][1], method)
-        plt.plot(range(len(inv_flux[0])), inv_flux[0], 'b-.')
-        #plt.plot(range(len(inv_flux[0])), inv_flux[0] + np.mean(flux_arr[test_inds], axis=0), 'g.')
-        plt.show()
-        break
-    '''
+        model_n_avg = modeler(train_inds, test_inds, flux_arr, model, method)
+        all_scores.append(scorer(train_inds, test_inds, flux_arr, model_n_avg, method, score_methods, include_mle))
 
     collated_scores = {}
     for scores in all_scores:
-        print("Got scores obj of: " + str(scores))
+        #print("Got scores obj of: " + str(scores))
         for key, val in scores.items():
             if key in collated_scores:
                 collated_scores[key].append(val)
@@ -442,7 +460,7 @@ def score_via_CV(score_methods, flux_arr, model, method, folds=3, n_jobs=1, incl
     for key, vals in collated_scores.items():
         final_scores[key] = np.mean(vals)
 
-    print("Final_scores: " + str(final_scores))
+    #print("Final_scores: " + str(final_scores))
     return final_scores
 
 def transform_inverse_transform(flux_arr, model, model_flux_mean, method):

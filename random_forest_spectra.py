@@ -5,6 +5,7 @@ from astropy.table import Table
 from astropy.table import Column
 from astropy.table import vstack
 from astropy.table import join
+import astropy.coordinates as ascoord
 
 from sklearn import ensemble
 from sklearn import gaussian_process
@@ -35,6 +36,7 @@ import sys
 import pickle as pk
 import random
 from functools import partial
+import pytz
 from pytz import timezone
 
 from astropy.utils.compat import argparse
@@ -43,22 +45,43 @@ import annotate_obs_metadata as aom
 
 RANDOM_STATE = 456371
 
-def load_metadata_for_dt_altaz(dt):
+def load_metadata_for_dt_altaz(dt, lunar_metadata, solar_metadata, sunspot_metadata):
     block_dt = dt + aom.get_block_delta(dt)
     apo_tz = timezone('America/Denver')
     block_dt = apo_tz.localize(block_dt).astimezone(pytz.utc)
 
     block_dt_str = block_dt.strftime("%Y-%b-%d %H:%M")
 
-    lunar_md_table = Table.read(args.lunar_metadata, format="ascii.csv")
+    lunar_data = Table.read(lunar_metadata, format="ascii.csv")
     lunar_row = lunar_data[lunar_data['UTC'] == block_dt_str]
 
-    solar_md_table = Table.read(args.solar_metadata, format="ascii.csv")
+    solar_data = Table.read(solar_metadata, format="ascii.csv")
     solar_row = solar_data[solar_data['UTC'] == block_dt_str]
 
-    sunspot_md_table = Table.read(args.sunspot_metadata, format="ascii.csv")
+    sunspot_md_table = Table.read(sunspot_metadata, format="ascii.csv")
     ss_count, ss_area = aom.find_sunspot_data(block_dt_str, sunspot_md_table)
 
+    return lunar_row, solar_row, ss_count, ss_area
+
+def metadata_for_alt_az(base_altaz_coord, lunar_row, solar_row, ss_count, ss_area):
+    base_radec_coord = base_altaz_coord.transform_to('icrs')
+    airmass = 1.0/np.cos(base_altaz_coord.alt)
+
+    lunar_radec_coord = ascoord.SkyCoord(ra=lunar_row['RA_ABS'], dec=lunar_row['DEC_ABS'], unit='deg', frame='icrs')
+    lunar_sep = base_radec_coord.separation(lunar_radec_coord)
+
+    solar_radec_coord = ascoord.SkyCoord(ra=solar_row['RA_ABS'], dec=solar_row['DEC_ABS'], unit='deg', frame='icrs')
+    solar_sep = base_radec_coord.separation(solar_radec_coord)
+
+    galactic_core_coord = ascoord.SkyCoord(l=0, b=0, unit='deg', frame='galactic')
+    galactic_sep = base_radec_coord.separation(galactic_core_coord)
+    base_galactic_coord = base_altaz_coord.transform_to('galactic')
+
+    return base_radec_coord.ra.value, base_radec_coord.dec.value, base_altaz_coord.az.value, \
+            base_altaz_coord.alt.value, airmass, lunar_row['MG_APP'][0], \
+            lunar_row['ELV_APP'][0], lunar_sep.value, solar_row['ELV_APP'][0], \
+            solar_sep.value, galactic_sep.value, base_galactic_coord.l.value, \
+            ss_count, ss_area
 
 def load_observation_metadata(path='.', file='annotated_metadata.csv', flags=""):
     data = Table.read(os.path.join(path, file), format="ascii.csv")

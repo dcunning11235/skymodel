@@ -47,14 +47,19 @@ def find_ephemeris_lookup_date(tai_beg, tai_end, obs_md_table):
     return ret[mask], obs_md_table[mask]
 
 def find_sunspot_data(ephemeris_block, sunspot_md_table):
-    count_ret = np.zeros((len(ephemeris_block,), ), dtype=float)
-    area_ret = np.zeros((len(ephemeris_block,), ), dtype=float)
-
-    #terrible for performance, but one-time only
-    for i, somedate in enumerate(ephemeris_block):
-        lookup_str = ephemeris_block[i].split()[0]
+    try:
+        lookup_str = ephemeris_block.split()[0]
+        count_ret = np.zeros((1, ), dtype=float)
+        area_ret = np.zeros((1, ), dtype=float)
         result = sunspot_md_table[sunspot_md_table["DATE"]==lookup_str]["SESC","SSAREA"]
-        count_ret[i], area_ret[i] = result["SESC"][0], result["SSAREA"][0]
+        count_ret[0], area_ret[0] = result["SESC"][0], result["SSAREA"][0]
+    except:
+        count_ret = np.zeros((len(ephemeris_block,), ), dtype=float)
+        area_ret = np.zeros((len(ephemeris_block,), ), dtype=float)
+        for i, somedate in enumerate(ephemeris_block):
+            lookup_str = ephemeris_block[i].split()[0]
+            result = sunspot_md_table[sunspot_md_table["DATE"]==lookup_str]["SESC","SSAREA"]
+            count_ret[i], area_ret[i] = result["SESC"][0], result["SSAREA"][0]
 
     return count_ret, area_ret
 
@@ -94,14 +99,13 @@ def get_tai_block_delta(tai, direction="closest"):
 
     return get_block_delta(tai, direction)
 
-def get_block_delta(dt, direction="closest"):
-    delta_mins = - ((tai.minute % ephemeris_block_size_minutes) + (tai.second / 60.0))
+def get_block_delta(tai_dt, direction="closest"):
+    delta_mins = - ((tai_dt.minute % ephemeris_block_size_minutes) + (tai_dt.second / 60.0))
     if direction == 'closest':
         if delta_mins <= -ephemeris_block_size_minutes/2:
             delta_mins = ephemeris_block_size_minutes + delta_mins
     elif direction == 'down':
-        #nada
-        True
+        pass
     elif direction == 'up':
         delta_mins = ephemeris_block_size_minutes + delta_mins
 

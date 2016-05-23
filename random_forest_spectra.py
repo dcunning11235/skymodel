@@ -300,10 +300,16 @@ def MAE(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_
 
 def MSE(Y, y, multioutput='uniform_average'):
     #return np.mean(np.mean(np.power(Y - y, 2), axis=1))
-    return mean_squared_error(Y, y, multioutput=multioutput)
+    try:
+        return mean_squared_error(Y, y, multioutput=multioutput)
+    except:
+        return mean_squared_error(Y, y)
 
 def R2(Y, y, multioutput='uniform_average'):
-    return r2_score(Y, y, multioutput=multioutput)
+    try:
+        return r2_score(Y, y, multioutput=multioutput)
+    except:
+        return r2_score(Y, y)
 
 def get_param_distribution_for_model(model_str, iter_count):
     pdist = {}

@@ -17,7 +17,7 @@ from sklearn.decomposition import DictionaryLearning
 from sklearn.manifold import Isomap
 
 from sklearn import preprocessing as skpp
-from sklearn.metrics import (explained_variance_score, mean_squared_error, median_absolute_error, r2_score)
+from sklearn.metrics import (explained_variance_score, mean_squared_error, median_absolute_error, r2_score, mean_absolute_error)
 from sklearn.metrics import r2_score
 
 from sklearn.covariance import MinCovDet
@@ -101,7 +101,7 @@ def main():
         help='Step size from comp_min to comp_max'
     )
     parser_compare.add_argument(
-        '--comparison', choices=['EXP_VAR', 'R2', 'MSE', 'MAE'], nargs='*', default=['EXP_VAR'],
+        '--comparison', choices=['EXP_VAR', 'R2', 'MSE', 'MAE', 'mmAE', 'LL'], nargs='*', default=['EXP_VAR'],
         help='Comparison methods: Explained variance (score), R2 (score), mean sq. error (loss), MEDIAN absolute error (loss)'
     )
     parser_compare.add_argument(
@@ -135,7 +135,6 @@ def main():
     ss = skpp.StandardScaler(with_std=False)
     if args.scale:
         ss = skpp.StandardScaler(with_std=True)
-    scaled_flux_arr = ss.fit_transform(flux_arr)
 
     if args.subparser_name == 'compare':
         fig, ax1 = plt.subplots()
@@ -152,19 +151,21 @@ def main():
 
                 model.n_components = n
 
-                comparisons = score_via_CV(args.comparison,
-                                    flux_arr if method == 'NMF' else scaled_flux_arr,
-                                    model, scaler, method, n_jobs=args.n_jobs, include_mle=mles_and_covs)
+                comparisons = score_via_CV(args.comparison, flux_arr, model, ss,
+                                    method, n_jobs=args.n_jobs, include_mle=mles_and_covs,
+                                    plot_example_reconstruction = args.plot_example_reconstruction)
                 for key, val in comparisons.items():
                     if key in scores:
                         scores[key].append(val)
                     else:
                         scores[key] = [val]
 
+            '''
             if mles_and_covs:
                 #ax2.axhline(cov_mcd_score(scaled_flux_arr, args.scale), color='violet', label='MCD Cov', linestyle='--')
                 ax2.axhline(cov_lw_score(scaled_flux_arr, args.scale), color='orange', label='LW Cov', linestyle='--')
-
+            '''
+            
             for key, score_list in scores.items():
                 if key != 'mle':
                     ax1.plot(n_components, score_list, label=method + ':' + key + ' scores')
@@ -179,6 +180,8 @@ def main():
 
         plt.show()
     else:
+        scaled_flux_arr = ss.fit_transform(flux_arr)
+
         for method in args.method:
             sources, components, model = dim_reduce(method, flux_arr if method == 'NMF' else scaled_flux_arr,
                                             args.n_components, args.n_neighbors,
@@ -349,6 +352,8 @@ def get_score_func(score_method):
         score_func = mean_squared_error
     elif score_method == 'MAE':
         score_func = median_absolute_error #Except can't use because doesn't support multioutput
+    elif score_method == 'mmAE':
+        score_func = mean_absolute_error
     elif score_method == 'LL':
         score_func = None
 
@@ -418,12 +423,25 @@ def _modeler(train_inds, test_inds, flux_arr, model, method):
     return new_model
 
 def score_via_CV(score_methods, flux_arr, model, scaler, method, folds=3, n_jobs=1, include_mle=False,
-                modeler=_modeler, scorer=_scorer):
-    kf = KFold(len(flux_arr), n_folds=folds, shuffle=True)
+                modeler=_modeler, scorer=_scorer, plot_example_reconstruction=False):
+    scaled_flux_arr = flux_arr if method == 'NMF' else scaler.fit_transform(flux_arr)
+
+    kf = KFold(len(scaled_flux_arr), n_folds=folds, shuffle=True)
     all_scores = []
+
     for train_inds, test_inds in kf:
-        model = modeler(train_inds, test_inds, flux_arr, model, method)
-        all_scores.append(scorer(train_inds, test_inds, flux_arr, model, scaler, method, score_methods, include_mle))
+        model = modeler(train_inds, test_inds, scaled_flux_arr, model, method)
+        all_scores.append(scorer(train_inds, test_inds, scaled_flux_arr, model, scaler, method, score_methods, include_mle))
+
+        if plot_example_reconstruction:
+            sample_data = flux_arr[test_inds[100], :].reshape(1, -1)
+            plt.plot(np.arange(flux_arr.shape[1]), sample_data[0, :], label="Sample Data")
+
+            trans_data = transform_inverse_transform(sample_data, model, scaler, method)
+            plt.plot(np.arange(flux_arr.shape[1]), trans_data[0, :], label="Trans Data")
+
+            plt.legend()
+            plt.show()
 
     collated_scores = {}
     for scores in all_scores:
@@ -442,13 +460,20 @@ def score_via_CV(score_methods, flux_arr, model, scaler, method, folds=3, n_jobs
     return final_scores
 
 def transform_inverse_transform(flux_arr, model, ss, method):
-    trans_arr = model.transform(flux_arr)
+    if ss is not None and method != 'NMF':
+        trans_arr = ss.transform(flux_arr)
+    else:
+        trans_arr = flux_arr
+    trans_arr = model.transform(trans_arr)
     return inverse_transform(trans_arr, model, ss, method)
 
 def inverse_transform(dm_flux_arr, model, ss, method):
     if method in ['PCA', 'KPCA', 'ICA']:
         att_invtrans = model.inverse_transform(dm_flux_arr)
     else:
+        #For FA, need to add back in mean, even if not taken out by scaler... right
+        #now, have opted to not handle this, rather just assume/make mean-subtration
+        #the norm/default scaler
         components = get_components(method, model)
 
         att_invtrans = np.zeros(shape=(dm_flux_arr.shape[0], components.shape[1]), dtype=float)

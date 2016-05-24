@@ -67,12 +67,19 @@ def main():
     )
     parser.add_argument(
         '--method', type=str, default=['ICA'], metavar='METHOD',
-        choices=['ICA', 'PCA', 'SPCA', 'NMF', 'ISO', 'KPCA', 'FA', 'DL'], nargs='+',
+        choices=['ICA', 'PCA', 'SPCA', 'NMF', 'ISO', 'KPCA', 'FA', 'DL', 'ICAexp', 'ICAcube'], nargs='+',
         help='Which dim. reduction method to use'
+    )
+    parser.add_argument(
+        '--method_args', type=str, default=None, nargs='*'
     )
     parser.add_argument(
         '--scale', action='store_true',
         help='Should inputs variance be scaled?  Defaults to mean subtract and value scale, but w/out this does not scale variance.'
+    )
+    parser.add_argument(
+        '--no_scale', action='store_true',
+        help='Suppresses all scaling'
     )
     parser.add_argument(
         '--ivar_cutoff', type=float, default=0.001, metavar='IVAR_CUTOFF',
@@ -132,16 +139,18 @@ def main():
     else:
         flux_arr = comb_flux_arr
 
-    ss = skpp.StandardScaler(with_std=False)
-    if args.scale:
-        ss = skpp.StandardScaler(with_std=True)
+    ss = None
+    if not args.no_scale:
+        ss = skpp.StandardScaler(with_std=False)
+        if args.scale:
+            ss = skpp.StandardScaler(with_std=True)
 
     if args.subparser_name == 'compare':
         fig, ax1 = plt.subplots()
         ax2 = ax1.twinx()
 
         for method in args.method:
-            model = get_model(method, max_iter=args.n_iter, random_state=random_state, n_jobs=args.n_jobs)
+            model = get_model(method, max_iter=args.n_iter, random_state=random_state, n_jobs=args.n_jobs, method_args=args.method_args)
             scores = {}
             mles_and_covs = args.mle_if_avail and (method == 'FA' or method == 'PCA')
 
@@ -165,12 +174,14 @@ def main():
                 #ax2.axhline(cov_mcd_score(scaled_flux_arr, args.scale), color='violet', label='MCD Cov', linestyle='--')
                 ax2.axhline(cov_lw_score(scaled_flux_arr, args.scale), color='orange', label='LW Cov', linestyle='--')
             '''
-            
+
             for key, score_list in scores.items():
                 if key != 'mle':
                     ax1.plot(n_components, score_list, label=method + ':' + key + ' scores')
                 else:
                     ax2.plot(n_components, score_list, '-.', label=method + ' mle scores')
+            print(n_components)
+            print(scores)
 
         ax1.set_xlabel('nb of components')
         ax1.set_ylabel('CV scores', figure=fig)
@@ -180,12 +191,13 @@ def main():
 
         plt.show()
     else:
-        scaled_flux_arr = ss.fit_transform(flux_arr)
+        scaled_flux_arr = flux_arr
+        if ss is not None and method != ' NMF':
+            scaled_flux_arr = ss.fit_transform(flux_arr)
 
         for method in args.method:
-            sources, components, model = dim_reduce(method, flux_arr if method == 'NMF' else scaled_flux_arr,
-                                            args.n_components, args.n_neighbors,
-                                            args.n_iter, random_state)
+            sources, components, model = dim_reduce(method, scaled_flux_arr, args.n_components,
+                                            args.n_neighbors, args.n_iter, random_state)
             serialize_data(sources, components, comb_exposure_arr, comb_wavelengths,
                             args.path, method)
             pickle_model((model, None if method == 'NMF' else ss), args.path, method)
@@ -244,11 +256,21 @@ def unpickle_model(path='.', method='ICA', filename=None):
 
     return model, ss
 
-def get_model(method, n=None, n_neighbors=None, max_iter=None, random_state=None, n_jobs=None):
+def get_model(method, n=None, n_neighbors=None, max_iter=None, random_state=None, n_jobs=None, method_args=None):
     model = None
 
+    kwargs = {}
+    if method_args is not None:
+        for arg_pair in method_args:
+            arg_par = arg_pair.split('=')
+            kwargs[arg_pair[0].trim()] = arg_pair[1].trim()
+
     if method == 'ICA':
-        model = FastICA(whiten=True)
+        model = FastICA(whiten=True, **kwargs)
+    elif method == 'ICAexp':
+        model = FastICA(whiten=True, fun='exp', **kwargs)
+    elif method == 'ICAcube':
+        model = FastICA(whiten=True, fun='cube', **kwargs)
     elif method == 'PCA':
         model = PCA()
     elif method == 'SPCA':
@@ -424,7 +446,7 @@ def _modeler(train_inds, test_inds, flux_arr, model, method):
 
 def score_via_CV(score_methods, flux_arr, model, scaler, method, folds=3, n_jobs=1, include_mle=False,
                 modeler=_modeler, scorer=_scorer, plot_example_reconstruction=False):
-    scaled_flux_arr = flux_arr if method == 'NMF' else scaler.fit_transform(flux_arr)
+    scaled_flux_arr = flux_arr if (method == 'NMF' or scaler is None) else scaler.fit_transform(flux_arr)
 
     kf = KFold(len(scaled_flux_arr), n_folds=folds, shuffle=True)
     all_scores = []

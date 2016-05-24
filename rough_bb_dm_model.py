@@ -35,6 +35,10 @@ def main():
         help='Should inputs variance be scaled?  Defaults to mean subtract and value scale, but w/out this does not scale variance.'
     )
     parser.add_argument(
+        '--no_scale', action='store_true',
+        help='Suppresses all scaling'
+    )
+    parser.add_argument(
         '--ivar_cutoff', type=float, default=0.001, metavar='IVAR_CUTOFF',
         help='data with inverse variace below cutoff is masked as if ivar==0'
     )
@@ -52,10 +56,14 @@ def main():
     comb_flux_arr, comb_exposure_arr, comb_ivar_arr, comb_masks, comb_wavelengths = iz.load_data(args)
     model = iz.get_model(args.method, n=args.n_components, n_neighbors=None, max_iter=args.n_iter, random_state=iz.random_state, n_jobs=args.n_jobs)
 
-    ss = skpp.StandardScaler(with_std=False)
-    if args.scale:
-        ss = skpp.StandardScaler(with_std=True)
-    scaled_flux_arr = ss.fit_transform(comb_flux_arr)
+    ss = None
+    if args.no_scale:
+        scaled_flux_arr = comb_flux_arr
+    else:
+        ss = skpp.StandardScaler(with_std=False)
+        if args.scale:
+            ss = skpp.StandardScaler(with_std=True)
+            scaled_flux_arr = ss.fit_transform(comb_flux_arr)
 
     #Heavily copied from J. Vanderplas/astroML bayesian_blocks.py
     N = comb_wavelengths.size

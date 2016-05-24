@@ -167,6 +167,10 @@ def main():
         help='Flags specifying observational metadata pre-processing, e.g. LUNAR_MAG which takes the '\
             'magnitude and linearizes it (ignoring that it is an area magnitude)'
     )
+    parser.add_argument(
+        '--compacted_path', type=str, default=None, metavar='COMPATED_PATH',
+        help='Path to find compacted/arrayized data; setting this will cause --path, --pattern to be ignored'
+    )
 
     parser_compare = subparsers.add_parser('compare')
     parser_compare.add_argument(
@@ -189,14 +193,9 @@ def main():
         '--scorer', type=str, choices=['R2', 'MAE', 'MSE', 'LL'], default='R2',
         help='Which scoring method to use to determine ranking of model instances.'
     )
-
     parser_compare.add_argument(
         '--use_spectra', action='store_true',
         help='Whether scoring is done against the DM components or the predicted spectra'
-    )
-    parser.add_argument(
-        '--compacted_path', type=str, default=None, metavar='COMPATED_PATH',
-        help='Path to find compacted/arrayized data; setting this will cause --path, --pattern to be ignored'
     )
     parser_compare.add_argument(
         '--ivar_cutoff', type=float, default=0.001, metavar='IVAR_CUTOFF',
@@ -247,7 +246,11 @@ def main():
         if args.scorer == 'R2':
             scorer = make_scorer(R2)
         elif args.scorer == 'MAE':
-            scorer = make_scorer(MAE, greater_is_better=False)
+            if args.use_spectra:
+                p_MAE_ = partial(MAE, Y_full=Y_arr, flux_arr=comb_flux_arr, source_model=source_model, ss=ss, method=args.method)
+                scorer = make_scorer(p_MAE_, greater_is_better=False)
+            else:
+                scorer = make_scorer(MAE, greater_is_better=False)
         elif args.scorer == 'MSE':
             scorer = make_scorer(MSE, greater_is_better=False)
         elif args.scorer == 'LL':
@@ -281,17 +284,27 @@ def main():
         if args.save_best:
             save_model(rcv.best_estimator_, args.model_path)
 
-def MAE(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_model=None, ss=None):
+def MAE(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_model=None, ss=None, method=None):
     if Y_full is not None and flux_arr is not None and source_model is not None and ss is not None:
         # Figure out the right way to do this... don't want to rewrite 4/5 of the
         # GridSearch/cross_validation code.  And I don't know a *good* way do this
         # array comparison 'right'
+
         inds = []
         for i in range(Y.shape[0]):
-            ind = np.flatnonzero(np.all(Y_full == Y[i, :], axis=0))
+            ind = np.where((Y_full == Y[i, :]).all(axis=1))
+            #print("ind:" + str(ind[0]))
             if len(ind) > 0:
-                inds = np.concatenate(inds, ind)
-        print(inds)
+                inds.append(ind[0])
+        #print(inds)
+        inds = np.concatenate(inds)
+        '''
+        print(Y_full.shape)
+        print(Y.shape)
+        print(np.where(Y_full == Y))
+        inds = np.where((Y_full == Y).all(axis=1))
+        '''
+        #print("Final inds arr: " + str(inds))
 
         back_trans_flux = ICAize.inverse_transform(y, source_model, ss, method)
         return np.mean(np.median(np.abs(flux_arr[inds] - back_trans_flux), axis=1))

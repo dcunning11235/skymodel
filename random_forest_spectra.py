@@ -14,9 +14,7 @@ from sklearn import svm
 from sklearn.decomposition import FastICA
 from sklearn.decomposition import SparsePCA
 
-from sklearn.metrics import make_scorer
-from sklearn.metrics import r2_score
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import (make_scorer, mean_squared_error, r2_score, explained_variance_score)
 
 from sklearn import preprocessing as skpp
 from sklearn.pipeline import make_pipeline
@@ -190,7 +188,7 @@ def main():
         help='Whether or not to save the (last/best) model built for e.g. --hyper_fit'
     )
     parser_compare.add_argument(
-        '--scorer', type=str, choices=['R2', 'MAE', 'MSE', 'LL'], default='R2',
+        '--scorer', type=str, choices=['R2', 'MAE', 'MSE', 'LL', 'EXP_VAR'], default='R2',
         help='Which scoring method to use to determine ranking of model instances.'
     )
     parser_compare.add_argument(
@@ -206,7 +204,7 @@ def main():
 
     obs_metadata = trim_observation_metadata(load_observation_metadata(args.metadata_path, flags=args.metadata_flags))
     sources, components, exposures, wavelengths = ICAize.deserialize_data(args.spectra_path, args.method)
-    source_model, ss = ICAize.unpickle_model(args.spectra_path, args.method)
+    source_model, ss, model_args = ICAize.unpickle_model(args.spectra_path, args.method)
 
     comb_flux_arr, comb_exposure_arr = None, None
     if args.use_spectra:
@@ -247,12 +245,22 @@ def main():
             scorer = make_scorer(R2)
         elif args.scorer == 'MAE':
             if args.use_spectra:
-                p_MAE_ = partial(MAE, Y_full=Y_arr, flux_arr=comb_flux_arr, source_model=source_model, ss=ss, method=args.method)
+                p_MAE_ = partial(MAE, Y_full=Y_arr, flux_arr=comb_flux_arr,
+                            source_model=source_model, ss=ss,
+                            source_model_args=model_args, method=args.method)
                 scorer = make_scorer(p_MAE_, greater_is_better=False)
             else:
                 scorer = make_scorer(MAE, greater_is_better=False)
         elif args.scorer == 'MSE':
             scorer = make_scorer(MSE, greater_is_better=False)
+        elif args.scorer == 'EXP_VAR':
+            if args.use_spectra:
+                p_EXP_VAR_ = partial(EXP_VAR, Y_full=Y_arr, flux_arr=comb_flux_arr,
+                            source_model=source_model, ss=ss,
+                            source_model_args=model_args, method=args.method)
+                scorer = make_scorer(p_EXP_VAR_)
+            else:
+                scorer = make_scorer(EXP_VAR)
         elif args.scorer == 'LL':
             scorer = None
 
@@ -284,32 +292,45 @@ def main():
         if args.save_best:
             save_model(rcv.best_estimator_, args.model_path)
 
-def MAE(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_model=None, ss=None, method=None):
+def MAE(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_model=None,
+        ss=None, source_model_args=None, method=None):
     if Y_full is not None and flux_arr is not None and source_model is not None and ss is not None:
         # Figure out the right way to do this... don't want to rewrite 4/5 of the
         # GridSearch/cross_validation code.  And I don't know a *good* way do this
         # array comparison 'right'
+        inds = get_inds_(Y, Y_full)
 
-        inds = []
-        for i in range(Y.shape[0]):
-            ind = np.where((Y_full == Y[i, :]).all(axis=1))
-            #print("ind:" + str(ind[0]))
-            if len(ind) > 0:
-                inds.append(ind[0])
-        #print(inds)
-        inds = np.concatenate(inds)
-        '''
-        print(Y_full.shape)
-        print(Y.shape)
-        print(np.where(Y_full == Y))
-        inds = np.where((Y_full == Y).all(axis=1))
-        '''
-        #print("Final inds arr: " + str(inds))
-
-        back_trans_flux = ICAize.inverse_transform(y, source_model, ss, method)
+        back_trans_flux = ICAize.inverse_transform(y, source_model, ss, method, source_model_args)
         return np.mean(np.median(np.abs(flux_arr[inds] - back_trans_flux), axis=1))
     else:
         return np.mean(np.median(np.abs(Y - y), axis=1))
+
+def EXP_VAR(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_model=None,
+        ss=None, source_model_args=None, method=None):
+    if Y_full is not None and flux_arr is not None and source_model is not None and ss is not None:
+        # Figure out the right way to do this... don't want to rewrite 4/5 of the
+        # GridSearch/cross_validation code.  And I don't know a *good* way do this
+        # array comparison 'right'
+        inds = get_inds_(Y, Y_full)
+
+        back_trans_flux = ICAize.inverse_transform(y, source_model, ss, method, source_model_args)
+        try:
+            return explained_variance_score(flux_arr[inds], back_trans_flux, multioutput=multioutput)
+        except:
+            return explained_variance_score(flux_arr[inds], back_trans_flux)
+    else:
+        try:
+            return explained_variance_score(Y, y, multioutput=multioutput)
+        except:
+            return explained_variance_score(Y, y)
+
+def get_inds_(Y, Y_full):
+    inds = []
+    for i in range(Y.shape[0]):
+        ind = np.where((Y_full == Y[i, :]).all(axis=1))
+        if len(ind) > 0:
+            inds.append(ind[0])
+    return np.concatenate(inds)
 
 def MSE(Y, y, multioutput='uniform_average'):
     #return np.mean(np.mean(np.power(Y - y, 2), axis=1))

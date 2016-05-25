@@ -139,11 +139,11 @@ def main():
     else:
         flux_arr = comb_flux_arr
 
-    ss = None
-    if not args.no_scale:
-        ss = skpp.StandardScaler(with_std=False)
-        if args.scale:
-            ss = skpp.StandardScaler(with_std=True)
+    ss = skpp.StandardScaler(with_std=False)
+    if args.scale:
+        ss = skpp.StandardScaler(with_std=True)
+    #Not awlays neded... but 95% of the time, so just do it here and be done with it
+    ss.fit(comb_flux_arr)
 
     if args.subparser_name == 'compare':
         fig, ax1 = plt.subplots()
@@ -162,7 +162,7 @@ def main():
 
                 comparisons = score_via_CV(args.comparison, flux_arr, model, ss,
                                     method, n_jobs=args.n_jobs, include_mle=mles_and_covs,
-                                    plot_example_reconstruction = args.plot_example_reconstruction)
+                                    args=args)
                 for key, val in comparisons.items():
                     if key in scores:
                         scores[key].append(val)
@@ -191,16 +191,14 @@ def main():
 
         plt.show()
     else:
-        scaled_flux_arr = flux_arr
-        if ss is not None and method != ' NMF':
-            scaled_flux_arr = ss.fit_transform(flux_arr)
+        scaled_flux_arr = flux_arr if (args.method == 'NMF' or args.no_scale) else ss.transform(flux_arr)
 
         for method in args.method:
             sources, components, model = dim_reduce(method, scaled_flux_arr, args.n_components,
                                             args.n_neighbors, args.n_iter, random_state)
             serialize_data(sources, components, comb_exposure_arr, comb_wavelengths,
                             args.path, method)
-            pickle_model((model, None if method == 'NMF' else ss), args.path, method)
+            pickle_model((model, ss, args), args.path, method)
 
 def load_data(args):
     if args.compacted_path is not None:
@@ -251,10 +249,10 @@ def unpickle_model(path='.', method='ICA', filename=None):
     if filename is None:
         filename = pickle_file.format(method)
     file = open(os.path.join(path, filename), 'rb')
-    model, ss = pk.load(file)
+    model, ss, model_args = pk.load(file)
     file.close()
 
-    return model, ss
+    return model, ss, model_args
 
 def get_model(method, n=None, n_neighbors=None, max_iter=None, random_state=None, n_jobs=None, method_args=None):
     model = None
@@ -381,11 +379,11 @@ def get_score_func(score_method):
 
     return score_func
 
-def _scorer(train_inds, test_inds, flux_arr, model, scaler, method, score_methods, include_mle):
+def _scorer(train_inds, test_inds, flux_arr, model, scaler, method, score_methods, include_mle, args):
     flux_test = flux_arr[test_inds]
     flux_conv_test = None
     if score_methods != ['LL']:
-        flux_conv_test = transform_inverse_transform(flux_test, model, scaler, method)
+        flux_conv_test = transform_inverse_transform(flux_test, model, scaler, method, args)
 
     scores = {}
 
@@ -445,21 +443,21 @@ def _modeler(train_inds, test_inds, flux_arr, model, method):
     return new_model
 
 def score_via_CV(score_methods, flux_arr, model, scaler, method, folds=3, n_jobs=1, include_mle=False,
-                modeler=_modeler, scorer=_scorer, plot_example_reconstruction=False):
-    scaled_flux_arr = flux_arr if (method == 'NMF' or scaler is None) else scaler.fit_transform(flux_arr)
+                modeler=_modeler, scorer=_scorer, args=None):
+    scaled_flux_arr = flux_arr if (method == 'NMF' or args.no_scale) else scaler.transform(flux_arr)
 
     kf = KFold(len(scaled_flux_arr), n_folds=folds, shuffle=True)
     all_scores = []
 
     for train_inds, test_inds in kf:
         model = modeler(train_inds, test_inds, scaled_flux_arr, model, method)
-        all_scores.append(scorer(train_inds, test_inds, scaled_flux_arr, model, scaler, method, score_methods, include_mle))
+        all_scores.append(scorer(train_inds, test_inds, scaled_flux_arr, model, scaler, method, score_methods, include_mle, args))
 
-        if plot_example_reconstruction:
+        if args.plot_example_reconstruction:
             sample_data = flux_arr[test_inds[100], :].reshape(1, -1)
             plt.plot(np.arange(flux_arr.shape[1]), sample_data[0, :], label="Sample Data")
 
-            trans_data = transform_inverse_transform(sample_data, model, scaler, method)
+            trans_data = transform_inverse_transform(sample_data, model, scaler, method, args)
             plt.plot(np.arange(flux_arr.shape[1]), trans_data[0, :], label="Trans Data")
 
             plt.legend()
@@ -481,15 +479,15 @@ def score_via_CV(score_methods, flux_arr, model, scaler, method, folds=3, n_jobs
     #print("Final_scores: " + str(final_scores))
     return final_scores
 
-def transform_inverse_transform(flux_arr, model, ss, method):
-    if ss is not None and method != 'NMF':
+def transform_inverse_transform(flux_arr, model, ss, method, args):
+    if method != 'NMF' and not args.no_scale:
         trans_arr = ss.transform(flux_arr)
     else:
         trans_arr = flux_arr
     trans_arr = model.transform(trans_arr)
-    return inverse_transform(trans_arr, model, ss, method)
+    return inverse_transform(trans_arr, model, ss, method, args)
 
-def inverse_transform(dm_flux_arr, model, ss, method):
+def inverse_transform(dm_flux_arr, model, ss, method, args):
     if method in ['PCA', 'KPCA', 'ICA']:
         att_invtrans = model.inverse_transform(dm_flux_arr)
     else:
@@ -504,10 +502,7 @@ def inverse_transform(dm_flux_arr, model, ss, method):
                 rec_comp = dm_flux_arr[flux_n, comp_n] * components[comp_n]
                 att_invtrans[flux_n] += rec_comp
 
-        #if method in ['FA']:
-        #    att_invtrans += model_flux_mean
-
-    if ss is not None and method != 'NMF':
+    if (method != 'NMF' and not args.no_scale) or method == 'FA':
         att_invtrans = ss.inverse_transform(att_invtrans)
 
     return att_invtrans

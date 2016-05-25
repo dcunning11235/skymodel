@@ -301,9 +301,9 @@ def MAE(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_
         inds = get_inds_(Y, Y_full)
 
         back_trans_flux = ICAize.inverse_transform(y, source_model, ss, method, source_model_args)
-        return np.mean(np.median(np.abs(flux_arr[inds] - back_trans_flux), axis=1))
+        return float(np.mean(np.median(np.abs(flux_arr[inds] - back_trans_flux), axis=1)))
     else:
-        return np.mean(np.median(np.abs(Y - y), axis=1))
+        return float(np.mean(np.median(np.abs(Y - y), axis=1)))
 
 def EXP_VAR(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_model=None,
         ss=None, source_model_args=None, method=None):

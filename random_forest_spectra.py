@@ -317,12 +317,14 @@ def EXP_VAR(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, sou
         try:
             return explained_variance_score(flux_arr[inds], back_trans_flux, multioutput=multioutput)
         except:
-            return explained_variance_score(flux_arr[inds], back_trans_flux)
+            #return explained_variance_score(flux_arr[inds], back_trans_flux)
+            retrun float(np.mean(np.var(flux_arr[inds] - back_trans_flux, axis=1) / np.var(flux_arr[inds], axis=1)))
     else:
         try:
             return explained_variance_score(Y, y, multioutput=multioutput)
         except:
-            return explained_variance_score(Y, y)
+            #return explained_variance_score(Y, y)
+            retrun float(np.mean(np.var(Y - y, axis=1) / np.var(Y, axis=1)))
 
 def get_inds_(Y, Y_full):
     inds = []

@@ -318,13 +318,13 @@ def EXP_VAR(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, sou
             return explained_variance_score(flux_arr[inds], back_trans_flux, multioutput=multioutput)
         except:
             #return explained_variance_score(flux_arr[inds], back_trans_flux)
-            retrun float(np.mean(np.var(flux_arr[inds] - back_trans_flux, axis=1) / np.var(flux_arr[inds], axis=1)))
+            return float(np.mean(np.var(flux_arr[inds] - back_trans_flux, axis=1) / np.var(flux_arr[inds], axis=1)))
     else:
         try:
             return explained_variance_score(Y, y, multioutput=multioutput)
         except:
             #return explained_variance_score(Y, y)
-            retrun float(np.mean(np.var(Y - y, axis=1) / np.var(Y, axis=1)))
+            return float(np.mean(np.var(Y - y, axis=1) / np.var(Y, axis=1)))
 
 def get_inds_(Y, Y_full):
     inds = []
@@ -369,9 +369,9 @@ def get_param_distribution_for_model(model_str, iter_count):
         for i in range(iter_count):
             trial_dict = {}
             trial_dict['corr'] = [random.choice(corr_methods)]
-            trial_dict['theta0'] = [theta0_range.rvs()]
-            trial_dict['thetaL'] = [thetaL_range.rvs()]
-            trial_dict['thetaU'] = [thetaU_range.rvs()]
+            trial_dict['theta0'] = [[theta0_range.rvs()]]
+            trial_dict['thetaL'] = [[thetaL_range.rvs()]]
+            trial_dict['thetaU'] = [[thetaU_range.rvs()]]
             trial_dict['random_start'] = [random_start_range.rvs()]
             pdist.append(trial_dict)
     elif model_str == 'KNN':

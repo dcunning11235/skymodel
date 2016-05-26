@@ -22,6 +22,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from sklearn.grid_search import RandomizedSearchCV, GridSearchCV
+from sklearn.cross_validation import ShuffleSplit
 from scipy.stats import randint as sp_randint
 from scipy.stats import uniform as sp_uniform
 
@@ -172,7 +173,7 @@ def main():
 
     parser_compare = subparsers.add_parser('compare')
     parser_compare.add_argument(
-        '--folds', type=int, default=None, metavar='TEST_FOLDS',
+        '--folds', type=int, default=3, metavar='TEST_FOLDS',
         help='Do k-fold cross validation with specified number of folds.  Defaults to 3.'
     )
     parser_compare.add_argument(
@@ -264,15 +265,19 @@ def main():
         elif args.scorer == 'LL':
             scorer = None
 
+        folder = ShuffleSplit(exposures.shape[0], n_iter=args.folds, test_size=1.0/args.folds,
+                            random_state=12345)
+
         if args.model == 'GP':
+            predictive_model.random_start = args.folds
             rcv = GridSearchCV(predictive_model, param_grid=pdist,
-                            error_score=0, cv=args.folds, n_jobs=args.n_jobs,
+                            error_score=0, cv=3, n_jobs=args.n_jobs,
                             scoring=scorer)
                             #random_state=RANDOM_STATE,
                             #n_iter=args.iters,
         else:
             rcv = RandomizedSearchCV(predictive_model, param_distributions=pdist,
-                            n_iter=args.iters, cv=args.folds, n_jobs=args.n_jobs,
+                            n_iter=args.iters, cv=folder, n_jobs=args.n_jobs,
                             scoring=scorer)
 
         # This is going to fit X (metdata) to Y (DM'ed sources).  But there are
@@ -283,6 +288,7 @@ def main():
 
         print(rcv.best_score_)
         print(rcv.best_params_)
+	print(rcv.best_estimator_)
         if args.outputfbk:
             print("=+"*10 + "=")
             for val in rcv.grid_scores_:
@@ -359,21 +365,24 @@ def get_param_distribution_for_model(model_str, iter_count):
     elif model_str == 'GP':
         #Fails because Gp will accpet either single values or array-like values, and it seems
         #RandomizedSearchCV etc. get confused (as they must, given no other information)
-        corr_methods = ['absolute_exponential', 'squared_exponential', 'generalized_exponential', 'cubic', 'linear']
-        theta0_range = sp_uniform(1e-3, 8e-1)
-        thetaL_range = sp_uniform(1e-5, 3e-1)
-        thetaU_range = sp_uniform(7e-1, 1)
-        random_start_range = sp_randint(1, 3)
+        #corr_methods = ['absolute_exponential', 'squared_exponential', 'generalized_exponential', 'cubic', 'linear']
+        pdist['corr'] = ['absolute_exponential', 'squared_exponential', 'cubic', 'linear']
+        #theta0_range = sp_uniform(0.1, 0.9)
+        #thetaL_range = sp_uniform(1e-5, 3e-1)
+        #thetaU_range = sp_uniform(7e-1, 1)
+        #random_start_range = sp_randint(1, 3)
 
+        '''
         pdist = []
         for i in range(iter_count):
             trial_dict = {}
             trial_dict['corr'] = [random.choice(corr_methods)]
-            trial_dict['theta0'] = [[theta0_range.rvs()]]
-            trial_dict['thetaL'] = [[thetaL_range.rvs()]]
-            trial_dict['thetaU'] = [[thetaU_range.rvs()]]
-            trial_dict['random_start'] = [random_start_range.rvs()]
+            #trial_dict['theta0'] = [theta0_range.rvs()]
+            #trial_dict['thetaL'] = [[thetaL_range.rvs()]]
+            #trial_dict['thetaU'] = [[thetaU_range.rvs()]]
+            #trial_dict['random_start'] = [random_start_range.rvs()]
             pdist.append(trial_dict)
+        '''
     elif model_str == 'KNN':
         pdist['weights'] = ['uniform', 'distance']
         pdist['metric'] = ['euclidean', 'manhattan', 'chebyshev']
@@ -393,7 +402,7 @@ def get_model(model_str):
     elif model_str == 'RF':
         return ensemble.RandomForestRegressor(random_state=RANDOM_STATE)
     elif model_str == 'GP':
-        return gaussian_process.GaussianProcess(random_state=RANDOM_STATE)
+        return gaussian_process.GaussianProcess(theta0=1e-2, thetaL=1e-4, thetaU=8e-1, random_state=RANDOM_STATE)
     elif model_str == 'KNN':
         return neighbors.KNeighborsRegressor()
     elif model_str == 'SVR':

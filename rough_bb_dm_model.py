@@ -67,7 +67,7 @@ def main():
 
     #Heavily copied from J. Vanderplas/astroML bayesian_blocks.py
     N = comb_wavelengths.size
-    step = args.n_components * 7
+    step = args.n_components * 4
 
     edges = np.concatenate([comb_wavelengths[:1:step],
                             0.5 * (comb_wavelengths[1::step] + comb_wavelengths[:-1:step]),

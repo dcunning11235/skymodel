@@ -301,11 +301,7 @@ def main():
 def MAE(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_model=None,
         ss=None, source_model_args=None, method=None):
     if Y_full is not None and flux_arr is not None and source_model is not None and ss is not None:
-        # Figure out the right way to do this... don't want to rewrite 4/5 of the
-        # GridSearch/cross_validation code.  And I don't know a *good* way do this
-        # array comparison 'right'
         inds = get_inds_(Y, Y_full)
-
         back_trans_flux = ICAize.inverse_transform(y, source_model, ss, method, source_model_args)
         return float(np.mean(np.median(np.abs(flux_arr[inds] - back_trans_flux), axis=1)))
     else:
@@ -314,25 +310,45 @@ def MAE(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_
 def EXP_VAR(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_model=None,
         ss=None, source_model_args=None, method=None):
     if Y_full is not None and flux_arr is not None and source_model is not None and ss is not None:
-        # Figure out the right way to do this... don't want to rewrite 4/5 of the
-        # GridSearch/cross_validation code.  And I don't know a *good* way do this
-        # array comparison 'right'
         inds = get_inds_(Y, Y_full)
-
         back_trans_flux = ICAize.inverse_transform(y, source_model, ss, method, source_model_args)
         try:
             return explained_variance_score(flux_arr[inds], back_trans_flux, multioutput=multioutput)
         except:
-            #return explained_variance_score(flux_arr[inds], back_trans_flux)
             return float(np.mean(np.var(flux_arr[inds] - back_trans_flux, axis=1) / np.var(flux_arr[inds], axis=1)))
     else:
         try:
             return explained_variance_score(Y, y, multioutput=multioutput)
         except:
-            #return explained_variance_score(Y, y)
             return float(np.mean(np.var(Y - y, axis=1) / np.var(Y, axis=1)))
 
+def MAPED(Y, y, multioutput='uniform_average', power=4, cutoff=0.1, Y_full=None, flux_arr=None, source_model=None,
+        ss=None, source_model_args=None, method=None):
+    #Mean Absolute Power Error Difference;  take sum of (absolute) diffs, subtract MAPE from it
+    if Y_full is not None and flux_arr is not None and source_model is not None and ss is not None:
+        inds = get_inds_(Y, Y_full)
+        back_trans_flux = ICAize.inverse_transform(y, source_model, ss, method, source_model_args)
+
+        diffs = np.abs(flux_arr[inds] - back_trans_flux)
+        diffs[diff < cutoff] = 0
+
+        sums = np.sum(diffs, axis=1)
+        diffs = np.sum(np.power(diffs, power), axis=1)
+
+        return float(np.mean(nb.abs(sums - np.power(diffs, 1.0/power))) / flux_arr.shape[1])
+    else:
+        diffs = np.abs(Y - y)
+        diffs[diff < cutoff] = 0
+
+        sums = np.sum(diffs, axis=1)
+        diffs = np.sum(np.power(diffs, power), axis=1)
+
+        return float(np.mean(nb.abs(sums - np.power(diffs, 1.0/power))) / Y.shape[1])
+
 def get_inds_(Y, Y_full):
+    # Figure out the right way to do this... don't want to rewrite 4/5 of the
+    # GridSearch/cross_validation code.  And I don't know a *good* way do this
+    # array comparison 'right'
     inds = []
     for i in range(Y.shape[0]):
         ind = np.where((Y_full == Y[i, :]).all(axis=1))
@@ -358,7 +374,7 @@ def get_param_distribution_for_model(model_str, iter_count):
 
     if model_str in ['ET', 'RF']:
         pdist['n_estimators'] = sp_randint(100, 500)
-        pdist['max_features'] = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1]#sp_uniform(0.5, 1)
+        pdist['max_features'] = [0.15, 0.2, 0.25, 0.3, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1]#sp_uniform(0.5, 1)
         pdist['min_samples_split'] = sp_randint(1, 15)
         pdist['min_samples_leaf'] = sp_randint(1, 15)
         pdist['bootstrap'] = [True, False]

@@ -503,7 +503,11 @@ def inverse_transform(dm_flux_arr, model, ss, method, args):
                 att_invtrans[flux_n] += rec_comp
 
     if (method != 'NMF' and not args.no_scale) or method == 'FA':
-        att_invtrans = ss.inverse_transform(att_invtrans)
+        #F'ing scikit 0.16...
+        if method == 'FA' and (args.no_scale or not args.scale):
+            att_invtrans += ss.mean_
+	else:
+            att_invtrans = ss.inverse_transform(att_invtrans)
 
     return att_invtrans
 

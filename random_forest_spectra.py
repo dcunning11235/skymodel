@@ -200,7 +200,7 @@ def main():
         '--ivar_cutoff', type=float, default=0.001, metavar='IVAR_CUTOFF',
         help='data with inverse variace below cutoff is masked as if ivar==0'
     )
-    parser.compare.add_argument(
+    parser_compare.add_argument(
         '--plot_final_errors', action='store_true',
         help='If set, will plot the errors from the final/best model, for the whole dataset'
     )
@@ -300,7 +300,7 @@ def main():
 
         print(rcv.best_score_)
         print(rcv.best_params_)
-	    print(rcv.best_estimator_)
+        print(rcv.best_estimator_)
         if args.outputfbk:
             print("=+"*10 + "=")
             for val in rcv.grid_scores_:

@@ -189,7 +189,7 @@ def main():
         help='Whether or not to save the (last/best) model built for e.g. --hyper_fit'
     )
     parser_compare.add_argument(
-        '--scorer', type=str, choices=['R2', 'MAE', 'MSE', 'LL', 'EXP_VAR'], default='R2',
+        '--scorer', type=str, choices=['R2', 'MAE', 'MSE', 'LL', 'EXP_VAR', 'MAPED'], default='R2',
         help='Which scoring method to use to determine ranking of model instances.'
     )
     parser_compare.add_argument(
@@ -199,6 +199,10 @@ def main():
     parser_compare.add_argument(
         '--ivar_cutoff', type=float, default=0.001, metavar='IVAR_CUTOFF',
         help='data with inverse variace below cutoff is masked as if ivar==0'
+    )
+    parser.compare.add_argument(
+        '--plot_final_errors', action='store_true',
+        help='If set, will plot the errors from the final/best model, for the whole dataset'
     )
 
     args = parser.parse_args()
@@ -262,6 +266,14 @@ def main():
                 scorer = make_scorer(p_EXP_VAR_)
             else:
                 scorer = make_scorer(EXP_VAR)
+        elif args.scorer == 'MAPED':
+            if args.use_spectra:
+                p_MAPED_ = partial(MAPED, Y_full=Y_arr, flux_arr=comb_flux_arr,
+                            source_model=source_model, ss=ss,
+                            source_model_args=model_args, method=args.method)
+                scorer = make_scorer(p_MAPED_, greater_is_better=False)
+            else:
+                scorer = make_scorer(MAPED, greater_is_better=False)
         elif args.scorer == 'LL':
             scorer = None
 
@@ -288,7 +300,7 @@ def main():
 
         print(rcv.best_score_)
         print(rcv.best_params_)
-	print(rcv.best_estimator_)
+	    print(rcv.best_estimator_)
         if args.outputfbk:
             print("=+"*10 + "=")
             for val in rcv.grid_scores_:
@@ -297,6 +309,11 @@ def main():
 
         if args.save_best:
             save_model(rcv.best_estimator_, args.model_path)
+        if args.plot_final_errors:
+            predicted = rcv.best_estimator_.predict(X_arr)
+            back_trans_flux = ICAize.inverse_transform(predicted, source_model, ss, args.method, model_args)
+            diffs = np.abs(comb_flux_arr - back_trans_flux)
+            plt.plot(comb_wavelengths, diffs, 'b-', alpha=0.3)
 
 def MAE(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_model=None,
         ss=None, source_model_args=None, method=None):
@@ -330,12 +347,12 @@ def MAPED(Y, y, multioutput='uniform_average', power=4, cutoff=0.1, Y_full=None,
         back_trans_flux = ICAize.inverse_transform(y, source_model, ss, method, source_model_args)
 
         diffs = np.abs(flux_arr[inds] - back_trans_flux)
-        diffs[diff < cutoff] = 0
+        diffs[diffs < cutoff] = 0
 
         sums = np.sum(diffs, axis=1)
         diffs = np.sum(np.power(diffs, power), axis=1)
 
-        return float(np.mean(nb.abs(sums - np.power(diffs, 1.0/power))) / flux_arr.shape[1])
+        return float(np.mean(np.abs(sums - np.power(diffs, 1.0/power))) / flux_arr.shape[1])
     else:
         diffs = np.abs(Y - y)
         diffs[diff < cutoff] = 0
@@ -343,7 +360,7 @@ def MAPED(Y, y, multioutput='uniform_average', power=4, cutoff=0.1, Y_full=None,
         sums = np.sum(diffs, axis=1)
         diffs = np.sum(np.power(diffs, power), axis=1)
 
-        return float(np.mean(nb.abs(sums - np.power(diffs, 1.0/power))) / Y.shape[1])
+        return float(np.mean(np.abs(sums - np.power(diffs, 1.0/power))) / Y.shape[1])
 
 def get_inds_(Y, Y_full):
     # Figure out the right way to do this... don't want to rewrite 4/5 of the

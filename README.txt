@@ -1,9 +1,9 @@
-These utilities are meant to be run in an order (exmaple below), and depend on
+These utilities are meant to be run in an order (example below), and depend on
 manually downloaded external data files (the testing set, which covers the start
 of SDSS DR12 to July 1, 2014, is available in ./source_data.)
 
 1.)  observation_metadata.py
-    This is the util that outputs metadata for plates-exposures.  It has two
+    This is the utility that outputs metadata for plates-exposures.  It has two
 modes, "--no_gather" which simply dumps metadata to stdout 'regular' (unflagged)
 which saves data to either a FITS or CSV file named "observation_metadata".  It
 obtains the metadata from the FIBER 1 spec file, not from plate/frame/etc.
@@ -71,6 +71,14 @@ Like the Horizons files, these include header comments that need to be chopped
 out (by hand); and again, you should just copy the header form the files in
 ./source_data.
 
+There are other data in this same location, including k-index, X-ray flares,
+proton/electron flux (at GOES 13.)  These might be more useful, but require
+additional parsing (and perhaps processing, what does a flux of B3.2 mean?);
+also, I'm not sure of the actual meaning of some of this.  See, e.g.:
+ftp://ftp.swpc.noaa.gov/pub/indices/old_indices/2016Q1_DPD.txt
+ftp://ftp.swpc.noaa.gov/pub/indices/old_indices/2016Q1_DGD.txt
+ftp://ftp.swpc.noaa.gov/pub/indices/old_indices/2016Q1_DSD.txt
+
 5.)  stack.py
 Takes a file containing fibers (PLATE, MJD, FIBER) and stacks fibers for each
 plate/mjd, giving a weighted average, re-sampled output.  This is saved as either
@@ -82,4 +90,4 @@ emissions...
 
 6.)  arrayize.py
 This is an optional utility that takes all the stacked files (FITS or CSV) and
-saves them in .pkl file.
+saves them in .npz file.

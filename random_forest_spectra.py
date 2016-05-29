@@ -202,7 +202,10 @@ def main():
     )
     parser_compare.add_argument(
         '--plot_final_errors', action='store_true',
-        help='If set, will plot the errors from the final/best model, for the whole dataset'
+        help='If set, will plot the errors from the final/best model, for the whole dataset, from ' + \
+            'the best model re-trained on CV folds used for testing.' + \
+            'Plots all errors on top of each other with low-ish alpha, to give a kind of visual ' + \
+            'density map of errors.'
     )
 
     args = parser.parse_args()
@@ -211,7 +214,7 @@ def main():
     sources, components, exposures, wavelengths = ICAize.deserialize_data(args.spectra_path, args.method)
     source_model, ss, model_args = ICAize.unpickle_model(args.spectra_path, args.method)
 
-    comb_flux_arr, comb_exposure_arr = None, None
+    comb_flux_arr, comb_exposure_arr, comb_wavelengths = None, None, None
     if args.use_spectra:
         comb_flux_arr, comb_exposure_arr, comb_ivar_arr, comb_masks, comb_wavelengths = ICAize.load_data(args)
 
@@ -225,7 +228,6 @@ def main():
 
         del comb_ivar_arr
         del comb_masks
-        del comb_wavelengths
 
     reduced_obs_metadata = obs_metadata[np.in1d(obs_metadata['EXP_ID'], exposures)]
     reduced_obs_metadata.sort('EXP_ID')
@@ -309,11 +311,15 @@ def main():
 
         if args.save_best:
             save_model(rcv.best_estimator_, args.model_path)
+
         if args.plot_final_errors:
-            predicted = rcv.best_estimator_.predict(X_arr)
-            back_trans_flux = ICAize.inverse_transform(predicted, source_model, ss, args.method, model_args)
-            diffs = np.abs(comb_flux_arr - back_trans_flux)
-            plt.plot(comb_wavelengths, diffs, 'b-', alpha=0.3)
+            for train_inds, test_inds in folder:
+                rcv.best_estimator_.fit(X_arr[train_inds], Y_arr[train_inds])
+                predicted = rcv.best_estimator_.predict(X_arr[test_inds])
+                back_trans_flux = ICAize.inverse_transform(predicted, source_model, ss, args.method, model_args)
+                diffs = np.abs(comb_flux_arr[test_inds] - back_trans_flux)
+                plt.plot(comb_wavelengths, diffs, 'b-', alpha=0.2)
+            plt.show()
 
 def MAE(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_model=None,
         ss=None, source_model_args=None, method=None):

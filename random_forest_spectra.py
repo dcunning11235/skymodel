@@ -20,6 +20,7 @@ from sklearn import preprocessing as skpp
 from sklearn.pipeline import make_pipeline
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+import sklearn.preprocessing as pp
 
 from sklearn.grid_search import RandomizedSearchCV, GridSearchCV
 from sklearn.cross_validation import ShuffleSplit
@@ -96,16 +97,16 @@ def load_observation_metadata(path='.', file='annotated_metadata.csv', flags="")
         data['SOLAR_SEP'] = (data['LUNAR_SEP'] + 360.0) % 360.0
         data['GALACTIC_CORE_SEP'] = (data['GALACTIC_CORE_SEP'] + 360.0) % 360.0
         data['GALACTIC_PLANE_SEP'] = (data['GALACTIC_PLANE_SEP'] + 360.0) % 360.0
-        #data['ECLIPTIC_PLANE_SEP'] = (data['ECLIPTIC_PLANE_SEP'] + 360.0) % 360.0
-        #data['ECLIPTIC_PLANE_SOLAR_SEP'] = (data['ECLIPTIC_PLANE_SOLAR_SEP'] + 360.0) % 360.0
+        data['ECLIPTIC_PLANE_SEP'] = (data['ECLIPTIC_PLANE_SEP'] + 360.0) % 360.0
+        data['ECLIPTIC_PLANE_SOLAR_SEP'] = (data['ECLIPTIC_PLANE_SOLAR_SEP'] + 360.0) % 360.0
 
     if "cos_sep_angles" in flags:
         data['LUNAR_SEP'] = np.cos(data['LUNAR_SEP'] * np.pi/180.0)
         data['SOLAR_SEP'] = np.cos(data['LUNAR_SEP'] * np.pi/180.0)
         data['GALACTIC_CORE_SEP'] = np.cos(data['GALACTIC_CORE_SEP'] * np.pi/180.0)
         data['GALACTIC_PLANE_SEP'] = np.cos(data['GALACTIC_PLANE_SEP'] * np.pi/180.0)
-        #data['ECLIPTIC_PLANE_SEP'] = np.cos(data['ECLIPTIC_PLANE_SEP'] * np.pi/180.0)
-        #data['ECLIPTIC_PLANE_SOLAR_SEP'] = np.cos(data['ECLIPTIC_PLANE_SOLAR_SEP'] * np.pi/180.0)
+        data['ECLIPTIC_PLANE_SEP'] = np.cos(data['ECLIPTIC_PLANE_SEP'] * np.pi/180.0)
+        data['ECLIPTIC_PLANE_SOLAR_SEP'] = np.cos(data['ECLIPTIC_PLANE_SOLAR_SEP'] * np.pi/180.0)
 
     return data
 
@@ -119,8 +120,8 @@ def trim_observation_metadata(data, copy=False):
                     'LUNAR_MAGNITUDE', 'LUNAR_ELV', 'LUNAR_SEP', 'SOLAR_ELV',
                     'SOLAR_SEP', 'GALACTIC_CORE_SEP',
                     'GALACTIC_PLANE_SEP',
-                    'SS_COUNT', 'SS_AREA']
-                    #,'ECLIPTIC_PLANE_SEP', 'ECLIPTIC_PLANE_SOLAR_SEP']
+                    'SS_COUNT', 'SS_AREA',
+                    'ECLIPTIC_PLANE_SEP', 'ECLIPTIC_PLANE_SOLAR_SEP']
     removed_columns = [name for name in data.colnames if name not in kept_columns]
     data.remove_columns(removed_columns)
 
@@ -189,7 +190,7 @@ def main():
         help='Whether or not to save the (last/best) model built for e.g. --hyper_fit'
     )
     parser_compare.add_argument(
-        '--scorer', type=str, choices=['R2', 'MAE', 'MSE', 'LL', 'EXP_VAR', 'MAPED'], default='R2',
+        '--scorer', type=str, choices=['R2', 'MAE', 'MSE', 'LL', 'EXP_VAR', 'MAPED', 'MSEMV'], default='R2',
         help='Which scoring method to use to determine ranking of model instances.'
     )
     parser_compare.add_argument(
@@ -259,7 +260,21 @@ def main():
             else:
                 scorer = make_scorer(MAE, greater_is_better=False)
         elif args.scorer == 'MSE':
-            scorer = make_scorer(MSE, greater_is_better=False)
+            if args.use_spectra:
+                p_MSE_ = partial(MSE, Y_full=Y_arr, flux_arr=comb_flux_arr,
+                            source_model=source_model, ss=ss,
+                            source_model_args=model_args, method=args.method)
+                scorer = make_scorer(p_MSE_, greater_is_better=False)
+            else:
+                scorer = make_scorer(MSE, greater_is_better=False)
+        elif args.scorer == 'MSEMV':
+            if args.use_spectra:
+                p_MSEMV_ = partial(MSEMV, Y_full=Y_arr, flux_arr=comb_flux_arr,
+                            source_model=source_model, ss=ss,
+                            source_model_args=model_args, method=args.method)
+                scorer = make_scorer(p_MSEMV_, greater_is_better=False)
+            else:
+                scorer = make_scorer(MSEMV, greater_is_better=False)
         elif args.scorer == 'EXP_VAR':
             if args.use_spectra:
                 p_EXP_VAR_ = partial(EXP_VAR, Y_full=Y_arr, flux_arr=comb_flux_arr,
@@ -318,7 +333,9 @@ def main():
                 predicted = rcv.best_estimator_.predict(X_arr[test_inds])
                 back_trans_flux = ICAize.inverse_transform(predicted, source_model, ss, args.method, model_args)
                 diffs = np.abs(comb_flux_arr[test_inds] - back_trans_flux)
-                plt.plot(comb_wavelengths, diffs, 'b-', alpha=0.2)
+                #Is there not 'trick' to getting matplotlib to do this without a loop?
+                for i in range(diffs.shape[0]):
+                    plt.plot(comb_wavelengths, diffs[i, :], 'b-', alpha=0.01)
             plt.show()
 
 def MAE(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_model=None,
@@ -379,12 +396,52 @@ def get_inds_(Y, Y_full):
             inds.append(ind[0])
     return np.concatenate(inds)
 
-def MSE(Y, y, multioutput='uniform_average'):
-    #return np.mean(np.mean(np.power(Y - y, 2), axis=1))
-    try:
-        return mean_squared_error(Y, y, multioutput=multioutput)
-    except:
-        return mean_squared_error(Y, y)
+def MSE(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_model=None,
+        ss=None, source_model_args=None, method=None):
+    if Y_full is not None and flux_arr is not None and source_model is not None and ss is not None:
+        inds = get_inds_(Y, Y_full)
+        back_trans_flux = ICAize.inverse_transform(y, source_model, ss, method, source_model_args)
+
+        try:
+            return mean_squared_error(flux_arr[inds], back_trans_flux, multioutput=multioutput)
+        except:
+            return mean_squared_error(flux_arr[inds], back_trans_flux)
+    else:
+        try:
+            yss = pp.MaxAbsScaler()
+            Y = yss.fit_transform(Y)
+            y = yss.transform(y)
+        except:
+            scalefactor = np.amax(np.abs(Y), axis=0)
+            Y = Y / scalefactor
+            y = y / scalefactor
+
+        try:
+            return mean_squared_error(Y, y, multioutput=multioutput)
+        except:
+            return mean_squared_error(Y, y)
+
+def MSEMV(Y, y, multioutput='uniform_average', Y_full=None, flux_arr=None, source_model=None,
+        ss=None, source_model_args=None, method=None):
+    mse = MSE(Y, y, multioutput)
+    var = 0
+
+    if Y_full is not None and flux_arr is not None and source_model is not None and ss is not None:
+        inds = get_inds_(Y, Y_full)
+        #back_trans_flux = ICAize.inverse_transform(y, source_model, ss, method, source_model_args)
+
+        var = np.mean(np.var(flux_arr[inds], axis=0))
+    else:
+        try:
+            yss = pp.MaxAbsScaler()
+            Y = yss.fit_transform(Y)
+        except:
+            scalefactor = np.amax(np.abs(Y), axis=0)
+            Y = Y / scalefactor
+
+        var = np.mean(np.var(Y, axis=0))
+
+    return mse - var
 
 def R2(Y, y, multioutput='uniform_average'):
     try:

@@ -43,7 +43,7 @@ def main():
 
     obs_md_table = astab.join(obs_md_table, solar_md_table['EPHEM_DATE', 'RA_ABS', 'DEC_ABS'])
 
-    boresight_ra_dec = ascoord.SkyCoord(ra=obs_md_table['RA'], dec=obs_md_table['DEC'], distance=1.0, unit=('deg', 'deg', 'AU'), frame='fk5')
+    boresight_ra_dec = ascoord.SkyCoord(ra=obs_md_table['RA'], dec=obs_md_table['DEC'], distance=1.0, unit=('deg', 'deg', 'AU'), frame='fk5')  #Change distance to... e.g. 1 Mpc
     boresight_ecliptic = boresight_ra_dec.transform_to('heliocentrictrueecliptic')
 
     solar_ra_dec = ascoord.SkyCoord(ra=obs_md_table['RA_ABS'], dec=obs_md_table['DEC_ABS'], distance=1.0, unit=('deg', 'deg', 'AU'), frame='icrs')
